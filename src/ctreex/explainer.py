@@ -220,6 +220,10 @@ class TreeCounterfactualExplainer(object):
         CounterfactualExplanation
         """
         x = val.check_row(x, self.spec.n_columns)
+        if np.isnan(x.astype(np.float64)).any():
+            raise ValueError('Data points with missing values (nan) cannot be '
+                             'explained; the tree can still predict them '
+                             '(predict_leaf).')
         if instance_values is None:
             instance_values = self.spec.decode(x)
         lmf = self.leaf_meta_features

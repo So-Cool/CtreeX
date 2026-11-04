@@ -38,7 +38,9 @@ class TreeStructure(object):
     threshold : array-like of float
         Split thresholds.
     value : array-like of float, shape (n_nodes, n_classes)
-        (Weighted) class counts of the training data in every node.
+        (Weighted) class counts -- or, for trees built with scikit-learn 1.4
+        or newer, class proportions -- of the training data in every node.
+        Only their relative sizes are used (predictions and probabilities).
     classes : array-like
         Class labels (in the order of ``value`` columns).
     n_features : int, optional
@@ -47,11 +49,17 @@ class TreeStructure(object):
         Names of the data columns.
     metadata : dict, optional
         Any additional (JSON-serialisable) information.
+    missing_go_to_left : array-like of bool, optional
+        Where missing values (``nan``) go at every split node -- learnt by
+        scikit-learn 1.3 or newer. When not given, missing values go to the
+        right child (as with scikit-learn trees trained without them).
+
+    Only classifiers are supported (regression trees have no classes).
     """
 
     def __init__(self, children_left, children_right, feature, threshold,
                  value, classes, n_features=None, feature_names=None,
-                 metadata=None):
+                 metadata=None, missing_go_to_left=None):
         self.children_left = np.asarray(children_left, dtype=np.int64)
         self.children_right = np.asarray(children_right, dtype=np.int64)
         self.feature = np.asarray(feature, dtype=np.int64)
@@ -63,7 +71,14 @@ class TreeStructure(object):
             value = value[:, 0, :]
         self.value = value
         self.classes = np.asarray(classes)
+        self.missing_go_to_left = (
+            None if missing_go_to_left is None
+            else np.asarray(missing_go_to_left, dtype=bool))
         n_nodes = self.children_left.shape[0]
+        if (self.missing_go_to_left is not None
+                and self.missing_go_to_left.shape[0] != n_nodes):
+            raise ValueError('missing_go_to_left has to describe {} '
+                             'nodes.'.format(n_nodes))
         for name in ('children_right', 'feature', 'threshold', 'value'):
             if getattr(self, name).shape[0] != n_nodes:
                 raise ValueError('All the tree arrays have to describe {} '
@@ -109,7 +124,9 @@ class TreeStructure(object):
         return cls(tree.children_left, tree.children_right, tree.feature,
                    tree.threshold, tree.value, clf.classes_,
                    n_features=tree.n_features, feature_names=feature_names,
-                   metadata=meta)
+                   metadata=meta,
+                   missing_go_to_left=getattr(tree, 'missing_go_to_left',
+                                              None))
 
     @classmethod
     def from_dict(cls, d):
@@ -121,11 +138,12 @@ class TreeStructure(object):
         metadata = {k: v for k, v in d.items() if k not in (
             'format', 'format_version', 'children_left', 'children_right',
             'feature', 'threshold', 'value', 'classes', 'n_features',
-            'feature_names')}
+            'feature_names', 'missing_go_to_left')}
         return cls(d['children_left'], d['children_right'], d['feature'],
                    d['threshold'], d['value'], d['classes'],
                    n_features=d.get('n_features'),
-                   feature_names=d.get('feature_names'), metadata=metadata)
+                   feature_names=d.get('feature_names'), metadata=metadata,
+                   missing_go_to_left=d.get('missing_go_to_left'))
 
     def to_dict(self):
         d = {'format': JSON_FORMAT, 'format_version': JSON_FORMAT_VERSION,
@@ -137,6 +155,8 @@ class TreeStructure(object):
              'feature': self.feature.tolist(),
              'threshold': self.threshold.tolist(),
              'value': self.value.tolist()}
+        if self.missing_go_to_left is not None:
+            d['missing_go_to_left'] = self.missing_go_to_left.tolist()
         d.update(self.metadata)
         return d
 
@@ -167,13 +187,24 @@ class TreeStructure(object):
         return self.classes[int(np.argmax(self.value[leaf]))]
 
     def apply(self, X):
-        """Returns the id of the leaf each data point falls into."""
-        X = val.check_array_2d(X, self.n_features)
+        """
+        Returns the id of the leaf each data point falls into.
+
+        Missing values (``nan``) follow ``missing_go_to_left`` (the right
+        child when it is not available), as in scikit-learn.
+        """
+        X = val.check_array_2d(X, self.n_features).astype(np.float64)
         leaves = np.empty(X.shape[0], dtype=np.int64)
         for i, x in enumerate(X):
             node = 0
             while self.children_left[node] != TREE_LEAF:
-                if x[self.feature[node]] <= self.threshold[node]:
+                value = x[self.feature[node]]
+                if np.isnan(value):
+                    go_left = (self.missing_go_to_left is not None
+                               and self.missing_go_to_left[node])
+                    node = (self.children_left[node] if go_left
+                            else self.children_right[node])
+                elif value <= self.threshold[node]:
                     node = self.children_left[node]
                 else:
                     node = self.children_right[node]

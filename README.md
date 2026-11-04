@@ -159,6 +159,13 @@ uv sync --group notebooks && uv run jupyter lab notebooks/
   wrong distances or were missed, and some alternative categories were not
   listed. This was also the only cause of distances without leaves observed in
   practice, hence `continue_past_missing_distance` is now merely a safety net.
+* **Missing values.**
+  `TreeStructure` stores where missing values (`nan`) go at every split
+  (`missing_go_to_left`, learnt by scikit-learn 1.3 or newer; also saved in
+  JSON) and follows it when predicting; previously missing values always went
+  to the right child, which could disagree with scikit-learn.
+  `explain_instance` rejects data points with missing values with a clear
+  error (counterfactuals of missing values are not defined yet).
 * **Documentation.**
   How leaves describe numerical features is documented more accurately:
   an interval is `1` when it lies inside the region the leaf's path allows
