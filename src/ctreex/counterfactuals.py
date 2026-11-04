@@ -238,12 +238,15 @@ def extract_counterfactuals(lmf, instance, instance_values, support, spec,
             selected = [m for m, v in zip(members, values) if v != -1]
             if kind == NUMERICAL:
                 if not selected:
-                    # A feature split at a single threshold t has only the
+                    # Legacy only (without complete_numerical_intervals): a
+                    # feature split at a single threshold t has only the
                     # "A<=t" meta-feature; a leaf with "t<A" has it at -1.
                     # Swapping the bounds of the excluded intervals yields the
                     # complementary interval: (t, None) means "more than t".
                     # (Kept as tuples like the original -- ranking then
-                    # treats them as categories, i.e. de-duplicates them.)
+                    # treats them as categories, i.e., de-duplicates them.)
+                    # With complete intervals every leaf that tests the
+                    # feature has an interval at 1, so this is unreachable.
                     wannabe = [(m.upper, m.lower) for m, v in
                                zip(members, values) if v == -1]
                 else:

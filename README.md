@@ -13,13 +13,13 @@ It depends only on `numpy`.
 Python 3.9 or newer is required.
 
 ```sh
-pip install "ctreex @ git+https://github.com/So-Cool/ctreex.git@v0.0.1"
+pip install "ctreex @ git+https://github.com/So-Cool/ctreex.git@v0.0.2"
 ```
 
 or with the scikit-learn helpers and the plots
 
 ```sh
-pip install "ctreex[sklearn,plot] @ git+https://github.com/So-Cool/ctreex.git@v0.0.1"
+pip install "ctreex[sklearn,plot] @ git+https://github.com/So-Cool/ctreex.git@v0.0.2"
 ```
 
 ## Quick start
@@ -50,8 +50,10 @@ for distance, counterfactual in explanation.ranked():
 # 1 {'housing': {'is': ['renting'], 'wannabe': ['owning a house']}}
 ```
 
-`notebooks/` has two worked examples:
-a quick start and the [UCI German Credit][UCIgc] data.
+`notebooks/` has three worked examples:
+a quick start, the [UCI German Credit][UCIgc] data and a tour of the rest of
+the API (feature specifications, explanation details, individual fixes, tree
+storage, leaf-distance plots and the scikit-learn helpers).
 
 [UCIgc]: https://archive.ics.uci.edu/dataset/144/statlog+german+credit+data
 
@@ -123,6 +125,32 @@ uv sync --group notebooks && uv run jupyter lab notebooks/
 
 ## Changelog
 
+### 0.0.2
+
+* **New fix.**
+  `complete_numerical_intervals` (enabled by `implementation='fixed'`):
+  a numerical feature split at a single threshold `t` is now described by two
+  meta-features, `A<=t` and `t<A`, like features with more thresholds;
+  the legacy implementation created only `A<=t` and derived "more than `t`"
+  by swapping the bounds of the excluded interval.
+  The counterfactuals of data points and their distances to the leaves are
+  unchanged;
+  the leaf-to-leaf distances -- hence the volatility index and the leaf
+  support sets -- change since every interval contributes to them.
+* **Documentation.**
+  How leaves describe numerical features is documented more accurately:
+  an interval is `1` when it lies inside the region the leaf's path allows
+  for the feature and `-1` otherwise (e.g., the first interval is `1` exactly
+  when the path has no lower bound); all intervals are `0` when the path does
+  not test the feature.
+* **Notebook.**
+  `03_api_tour.ipynb` demonstrates the rest of the API:
+  `FeatureSpec.from_column_names` and `decode`, class names, `predict_leaf`,
+  `max_distance`, `at_distance`, per-leaf and per-feature counterfactuals,
+  individual fixes, `TreeStructure` (`apply`, `predict_proba`, JSON and
+  pickles), `leaf_metric_barplot`, `support_set_metric` and all
+  `ctreex.sklearn_tools` helpers.
+
 ### 0.0.1
 
 A numpy reimplementation of the original (2018) CtreeX code,
@@ -161,15 +189,7 @@ which was based on pandas and seaborn.
 |---|---|---|
 | `deterministic_order` | alternative categories de-duplicated with `list(set(...))`, so their order changed between program runs (string hashing is randomised) | order of discovery |
 | `continue_past_missing_distance` | the search stopped at the first distance at which no leaf exists, e.g. with leaves at distances 1 and 3 only the distance-3 counterfactuals were never found | missing distances are skipped |
+| `complete_numerical_intervals` (0.0.2) | a numerical feature split at a single threshold `t` had only the `A<=t` meta-feature | both `A<=t` and `t<A` |
 
 Select individual fixes with `fixes={'deterministic_order': False}` or a
 `ctreex.Fixes` object.
-
-#### Kept from the original
-
-* A numerical feature split at a single threshold `t` is described only by the
-  `A<=t` meta-feature; counterfactuals for the complementary interval are
-  produced by swapping the interval bounds (they are tuples rather than lists
-  and are therefore de-duplicated like categories when ranked).
-* The first (last) interval of a numerical feature is set for a leaf when its
-  path has no lower (upper) bound on the feature.

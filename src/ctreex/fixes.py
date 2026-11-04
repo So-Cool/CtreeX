@@ -38,9 +38,19 @@ class Fixes(object):
         (a ``KeyError``), even when leaves at larger distances exist. When
         ``True`` missing distances are skipped and all distances up to the
         maximum are examined.
+    complete_numerical_intervals : bool
+        The original implementation describes a numerical feature split at a
+        single threshold ``t`` only with the ``A<=t`` interval, while features
+        with ``k`` thresholds get ``k + 1`` intervals. When ``True``, the
+        missing ``t<A`` interval is added. The counterfactuals of data points
+        and their distances to the leaves do not change (only the internal
+        representation of the "more than t" intervals); the leaf-to-leaf
+        distances -- hence the volatility index and the leaf support sets --
+        do, since every interval contributes to them.
     """
     deterministic_order: bool = True
     continue_past_missing_distance: bool = True
+    complete_numerical_intervals: bool = True
 
     @classmethod
     def legacy(cls):

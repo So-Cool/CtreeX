@@ -62,9 +62,12 @@ def test_same_class_only_distance():
         # leaf 3 (distance 2) has the same class -- no counterfactuals there
         assert e.distances == [1, 2]
         assert e.at_distance(2).per_leaf == {}
-        # x0 is split at a single threshold: the interval is a tuple
+        # x0 is split at a single threshold: the legacy implementation has
+        # no "0.5<x0" meta-feature and describes the interval with a tuple
+        interval = ('0.5', None) if implementation == 'legacy' \
+            else ['0.5', None]
         assert e.at_distance(1).ranked[0] == {
-            'x0': {'is': [0], 'wannabe': [('0.5', None)]}}
+            'x0': {'is': [0], 'wannabe': [interval]}}
         assert TreeCounterfactualExplainer(tree).describe(
             e.at_distance(1).ranked)[0]['x0']['wannabe'] == ['more than 0.5']
 
@@ -98,3 +101,33 @@ def test_input_validation(toy_tree, toy_spec):
     with pytest.raises(ValueError):
         TreeCounterfactualExplainer(toy_tree, toy_spec,
                                     implementation='original')
+
+
+def test_complete_numerical_intervals():
+    case = load_case('single_threshold_case.json')
+    base = dataclasses.replace(Fixes.legacy(), deterministic_order=True)
+    legacy = TreeCounterfactualExplainer(case['tree'], fixes=base)
+    complete = TreeCounterfactualExplainer(
+        case['tree'],
+        fixes=dataclasses.replace(base, complete_numerical_intervals=True))
+    legacy_names = [m.name for m in legacy.meta_features]
+    complete_names = [m.name for m in complete.meta_features]
+    for feature in case['single_threshold']:
+        lower = [n for n in legacy_names if n.startswith(feature + '<=')]
+        assert len(lower) == 1
+        upper = '{}<{}'.format(lower[0].split('<=')[1], feature)
+        assert upper not in legacy_names and upper in complete_names
+    assert len(complete_names) == len(legacy_names) + len(
+        case['single_threshold'])
+    # the counterfactuals of data points and their distances do not change
+    for x in np.array(case['X']):
+        a, b = legacy.explain_instance(x), complete.explain_instance(x)
+        assert np.array_equal(a.leaf_distances, b.leaf_distances)
+        assert a.support == b.support
+        assert [(c.distance, legacy.describe(c.ranked))
+                for c in a.counterfactuals] == \
+            [(c.distance, complete.describe(c.ranked))
+             for c in b.counterfactuals]
+    # ... but the leaf-to-leaf distances do
+    assert not np.array_equal(legacy.leaf_distance_matrix()[0],
+                              complete.leaf_distance_matrix()[0])

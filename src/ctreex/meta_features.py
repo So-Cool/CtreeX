@@ -8,20 +8,29 @@ The logical conditions of the tree splits are turned into *meta-features*:
   e.g., ``A<=t1``, ``t1<A<=t2``, ..., ``tk<A`` -- and every interval is a
   meta-feature.
 
-Every leaf is then described by a vector over the meta-features with values
-``1`` when the leaf's path implies the condition, ``-1`` when the path
-contradicts it and ``0`` when the path does not constrain it.
+Every leaf is then described by a vector over the meta-features:
+
+* a one-hot column is ``1`` when the leaf's path requires the category,
+  ``-1`` when the path excludes it and ``0`` when the path allows it among
+  other categories (or does not test the feature);
+* the path of a leaf confines a numerical feature to a region
+  ``(lower, upper]`` (``lower``/``upper`` are the tightest bounds on the path,
+  possibly infinite); an interval is ``1`` when it lies inside this region and
+  ``-1`` otherwise. Since the intervals are cut at the feature's own
+  thresholds, every interval is either inside or outside of the region; e.g.,
+  the first interval ``A<=t1`` is ``1`` exactly when the path has no lower
+  bound on the feature. All intervals are ``0`` when the path does not test the
+  feature at all (unconstrained).
+
 A data point is described in the same way with values ``1``/``-1``.
 
 This module is a pure numpy reimplementation of the original (2018) code
 (``tree_to_code``, ``code_to_featuresplits``, ``get_meta_features``,
-``meta_features_per_leaf`` and ``instance_to_meta_features``),
-with the following behaviour:
-
-* a numerical feature split at a single threshold ``t`` is represented only by
-  the ``A<=t`` interval (no ``t<A`` meta-feature is created); and
-* the first (last) interval of a numerical feature is set to ``1`` for a leaf
-  when its path has no lower (upper) bound on the feature.
+``meta_features_per_leaf`` and ``instance_to_meta_features``).
+In the original code a numerical feature split at a single threshold ``t`` is
+represented only by the ``A<=t`` interval (no ``t<A`` meta-feature is
+created); the ``complete_numerical_intervals`` fix (see :mod:`ctreex.fixes`)
+adds the missing interval.
 """
 import dataclasses
 import itertools
@@ -193,12 +202,22 @@ def path_splits(paths):
     return splits
 
 
-def build_meta_features(splits, spec):
+def build_meta_features(splits, spec, complete_intervals=False):
     """
     Creates the meta-features from the split values of every column.
 
     The meta-features follow the order of the first appearance of the columns
     in the tree paths; numerical intervals are sorted by their thresholds.
+
+    Parameters
+    ----------
+    splits : dict
+        Output of :func:`path_splits`.
+    spec : ctreex.features.FeatureSpec
+    complete_intervals : bool
+        Create both intervals (``A<=t`` and ``t<A``) of a numerical feature
+        split at a single threshold ``t``; the original implementation created
+        only ``A<=t``.
     """
     meta_features = []
     for name, values in splits.items():
@@ -216,6 +235,10 @@ def build_meta_features(splits, spec):
                 meta_features.append(MetaFeature(
                     '{}<={}'.format(name, s_txt), feature, NUMERICAL, column,
                     upper=s_txt))
+                if last == 0 and complete_intervals:
+                    meta_features.append(MetaFeature(
+                        '{}<{}'.format(s_txt, name), feature, NUMERICAL,
+                        column, lower=s_txt))
             elif s_i == last:
                 previous = format_threshold(numericals[s_i - 1])
                 meta_features.append(MetaFeature(
