@@ -127,7 +127,7 @@ uv sync --group notebooks && uv run jupyter lab notebooks/
 
 ### 0.0.2
 
-* **New fix.**
+* **New fix: two numerical intervals.**
   `complete_numerical_intervals` (enabled by `implementation='fixed'`):
   a numerical feature split at a single threshold `t` is now described by two
   meta-features, `A<=t` and `t<A`, like features with more thresholds;
@@ -137,6 +137,17 @@ uv sync --group notebooks && uv run jupyter lab notebooks/
   unchanged;
   the leaf-to-leaf distances -- hence the volatility index and the leaf
   support sets -- change since every interval contributes to them.
+* **New fix: feature exclusion and inclusion.**
+  `whole_counterfactual_restrictions` (enabled by `implementation='fixed'`):
+  the `excluded` and `included` features of `explain_instance` select whole
+  counterfactuals, i.e., a leaf is used only if all the features that have to
+  change to reach it are allowed.
+  The legacy implementation removed the forbidden features from the
+  counterfactual of every leaf instead, which produced incomplete
+  counterfactuals (e.g., a distance-2 counterfactual changing a single
+  feature, which does not change the prediction) and empty ones.
+  With the fix every counterfactual at distance `d` changes exactly `d`
+  features.
 * **Documentation.**
   How leaves describe numerical features is documented more accurately:
   an interval is `1` when it lies inside the region the leaf's path allows
@@ -190,6 +201,7 @@ which was based on pandas and seaborn.
 | `deterministic_order` | alternative categories de-duplicated with `list(set(...))`, so their order changed between program runs (string hashing is randomised) | order of discovery |
 | `continue_past_missing_distance` | the search stopped at the first distance at which no leaf exists, e.g. with leaves at distances 1 and 3 only the distance-3 counterfactuals were never found | missing distances are skipped |
 | `complete_numerical_intervals` (0.0.2) | a numerical feature split at a single threshold `t` had only the `A<=t` meta-feature | both `A<=t` and `t<A` |
+| `whole_counterfactual_restrictions` (0.0.2) | `excluded`/`included` features were removed from every counterfactual, leaving incomplete and empty counterfactuals | leaves whose counterfactual needs a forbidden feature are skipped |
 
 Select individual fixes with `fixes={'deterministic_order': False}` or a
 `ctreex.Fixes` object.

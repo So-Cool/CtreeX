@@ -183,7 +183,7 @@ def grow_region(interval, intervals):
 
 def extract_counterfactuals(lmf, instance, instance_values, support, spec,
                             distance=1, excluded=(), included=(), exact=True,
-                            counterfactual=True):
+                            counterfactual=True, whole_restrictions=False):
     """
     Extracts the counterfactuals of a data point at a given distance.
 
@@ -202,6 +202,14 @@ def extract_counterfactuals(lmf, instance, instance_values, support, spec,
     excluded, included : collections.abc.Collection
         Base features that must not be (only these may be) part of a
         counterfactual; an empty ``included`` allows all features.
+    whole_restrictions : bool
+        How ``excluded`` and ``included`` are applied. When ``True``, a leaf
+        is used only if *all* the features that have to change to reach it
+        are allowed (otherwise it is skipped). When ``False`` (the original
+        implementation), the forbidden features are removed from the
+        counterfactual of every leaf, which leaves incomplete counterfactuals
+        -- changing only the remaining features does not reach the leaf --
+        and empty ones.
     exact : bool
         Distance flavour used to find the features that differ.
     counterfactual : bool
@@ -226,12 +234,17 @@ def extract_counterfactuals(lmf, instance, instance_values, support, spec,
 
     per_leaf, per_feature = {}, {}
     for leaf in leaves:
-        per_leaf[leaf] = {}
         row = lmf.row(leaf)
-        for group in lmf.groups:
+        changed = [group for group in lmf.groups
+                   if similarity([group], row, instance, exact) > 0]
+        if whole_restrictions:
+            if any(feature in excluded or feature not in included
+                   for _, feature, _ in changed):
+                continue  # this leaf needs a forbidden feature
+        per_leaf[leaf] = {}
+        for group in changed:
             kind, feature, indices = group
-            d = similarity([group], row, instance, exact)
-            if d <= 0 or feature in excluded or feature not in included:
+            if feature in excluded or feature not in included:
                 continue
             values = row[indices]
             members = [lmf.meta_features[i] for i in indices]

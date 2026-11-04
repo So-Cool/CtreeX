@@ -47,10 +47,20 @@ class Fixes(object):
         representation of the "more than t" intervals); the leaf-to-leaf
         distances -- hence the volatility index and the leaf support sets --
         do, since every interval contributes to them.
+    whole_counterfactual_restrictions : bool
+        How the ``excluded``/``included`` features of
+        ``explain_instance`` are applied. The original implementation removes
+        the forbidden features from the counterfactual of every leaf, which
+        yields incomplete counterfactuals (changing only the remaining
+        features does not reach the leaf, e.g., a distance-2 counterfactual
+        listing one feature) and empty ones. When ``True``, leaves whose
+        counterfactual needs a forbidden feature are skipped, so every
+        counterfactual at distance ``d`` changes exactly ``d`` features.
     """
     deterministic_order: bool = True
     continue_past_missing_distance: bool = True
     complete_numerical_intervals: bool = True
+    whole_counterfactual_restrictions: bool = True
 
     @classmethod
     def legacy(cls):

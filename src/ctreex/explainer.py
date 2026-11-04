@@ -211,7 +211,8 @@ class TreeCounterfactualExplainer(object):
             features).
         excluded, included : collections.abc.Collection
             Base features that must not (only these may) appear in the
-            counterfactuals.
+            counterfactuals (see the whole_counterfactual_restrictions
+            fix in :mod:`ctreex.fixes`).
 
         Returns
         -------
@@ -236,7 +237,8 @@ class TreeCounterfactualExplainer(object):
             try:
                 per_leaf, per_feature = cfs.extract_counterfactuals(
                     lmf, instance, instance_values, support, self.spec,
-                    distance=distance, excluded=excluded, included=included)
+                    distance=distance, excluded=excluded, included=included,
+                    whole_restrictions=self.fixes.whole_counterfactual_restrictions)
             except cfs.MissingDistance:
                 if self.fixes.continue_past_missing_distance:
                     continue

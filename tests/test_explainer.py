@@ -131,3 +131,75 @@ def test_complete_numerical_intervals():
     # ... but the leaf-to-leaf distances do
     assert not np.array_equal(legacy.leaf_distance_matrix()[0],
                               complete.leaf_distance_matrix()[0])
+
+
+def test_disjoint_regions():
+    sklearn_tree = pytest.importorskip('sklearn.tree')
+    X = np.arange(31, dtype=float).reshape(-1, 1)
+    y = np.where((X[:, 0] <= 10) | (X[:, 0] > 20), 'yes', 'no')
+    clf = sklearn_tree.DecisionTreeClassifier(random_state=0).fit(X, y)
+    explainer = TreeCounterfactualExplainer(clf, ['x'])
+    explanation = explainer.explain_instance(np.array([15.]))
+    assert explanation.prediction == 'no'
+    assert explainer.describe(explanation.at_distance(1).ranked) == {
+        0: {'x': {'is': [15], 'wannabe': ['less or equal to 10.5',
+                                          'more than 20.5']}}}
+
+
+RESTRICTIONS = [{'excluded': ['a']}, {'excluded': ['d', 'c']},
+                {'included': ['b', 'd']}, {'included': ['a']},
+                {'excluded': ['b'], 'included': ['a', 'b', 'c']}]
+
+
+@pytest.mark.parametrize('restriction', RESTRICTIONS)
+def test_whole_counterfactual_restrictions(restriction):
+    case = load_case('single_threshold_case.json')
+    fixed = TreeCounterfactualExplainer(case['tree'])
+    legacy = TreeCounterfactualExplainer(case['tree'],
+                                         implementation='legacy')
+    excluded = restriction.get('excluded', [])
+    included = restriction.get('included', [])
+
+    def allowed(feature):
+        return feature not in excluded and (not included
+                                            or feature in included)
+    for x in np.array(case['X']):
+        full = fixed.explain_instance(x)
+        restricted = fixed.explain_instance(x, **restriction)
+        for found in restricted.counterfactuals:
+            reference = full.at_distance(found.distance)
+            for leaf, changes in found.per_leaf.items():
+                # complete counterfactuals of allowed features only
+                assert len(changes) == found.distance
+                assert all(allowed(f) for f in changes)
+                assert changes == reference.per_leaf[leaf]
+            # leaves are skipped only when they need a forbidden feature
+            for leaf, changes in reference.per_leaf.items():
+                if all(allowed(f) for f in changes):
+                    assert leaf in found.per_leaf
+            assert all(cf for cf in found.ranked.values())
+        # the legacy implementation truncates the counterfactuals instead
+        legacy_full = legacy.explain_instance(x)
+        legacy_restricted = legacy.explain_instance(x, **restriction)
+        for found in legacy_restricted.counterfactuals:
+            reference = legacy_full.at_distance(found.distance)
+            assert set(found.per_leaf) == set(reference.per_leaf)
+            for leaf, changes in found.per_leaf.items():
+                assert changes == {f: v for f, v in
+                                   reference.per_leaf[leaf].items()
+                                   if allowed(f)}
+
+
+def test_restriction_fix_switch():
+    case = load_case('single_threshold_case.json')
+    truncating = TreeCounterfactualExplainer(
+        case['tree'], fixes={'whole_counterfactual_restrictions': False})
+    found_truncated = found_incomplete = False
+    for restriction in RESTRICTIONS:
+        for x in np.array(case['X']):
+            for found in truncating.explain_instance(
+                    x, **restriction).counterfactuals:
+                for changes in found.per_leaf.values():
+                    found_incomplete |= len(changes) < found.distance
+                    found_truncated |= not changes
+    assert found_incomplete and found_truncated
