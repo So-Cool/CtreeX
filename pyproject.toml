@@ -52,6 +52,7 @@ notebooks = [
     "jupyterlab>=4",
     "ipykernel>=6",
     "nbconvert>=7",
+    "pip>=26.0.1",
 ]
 
 [tool.uv]
