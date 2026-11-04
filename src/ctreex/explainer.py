@@ -17,6 +17,7 @@ The algorithm:
 """
 import dataclasses
 import logging
+import warnings
 
 import numpy as np
 
@@ -151,6 +152,14 @@ class TreeCounterfactualExplainer(object):
             feature_spec = self.tree.feature_names
         if not isinstance(feature_spec, FeatureSpec):
             feature_spec = FeatureSpec.from_column_names(list(feature_spec))
+        if (self.tree.feature_names is not None
+                and len(feature_spec.column_names)
+                == len(self.tree.feature_names)
+                and feature_spec.column_names != self.tree.feature_names):
+            warnings.warn('The column names of the feature specification '
+                          'differ from the feature names stored in the tree; '
+                          'make sure that the columns are in the same order.',
+                          UserWarning)
         self.spec = feature_spec
         self.implementation = implementation
         self.fixes = resolve_fixes(implementation, fixes)

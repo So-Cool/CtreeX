@@ -267,3 +267,13 @@ def test_counterfactuals_reach_their_leaves():
                 assert len(changes) == found.distance
                 new = _apply(spec, values, changes)
                 assert explainer.predict_leaf(new) == leaf
+
+
+def test_feature_names_check(toy_tree, toy_spec):
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        TreeCounterfactualExplainer(toy_tree, toy_spec)  # same names
+    with pytest.warns(UserWarning):
+        TreeCounterfactualExplainer(toy_tree, ['age', 'job_x', 'job_y',
+                                               'job_z'])

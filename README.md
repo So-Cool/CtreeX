@@ -101,6 +101,16 @@ tree as a whole.
 Trees are stored as JSON with `TreeStructure.from_sklearn(clf).to_json(path)`,
 since scikit-learn pickles only load in the version that wrote them.
 
+Supported models are binary decision tree *classifiers* (binary and
+multi-class); regression trees and multi-output trees are not supported.
+Missing values (`nan`) are routed as learnt by scikit-learn (1.3 or newer)
+when predicting, but data points with missing values cannot be explained.
+The `value` array of a `TreeStructure` holds class counts or -- for trees
+built with scikit-learn 1.4 or newer -- class proportions; only their relative
+sizes are used.
+When a tree stores feature names and they differ from the column names of the
+feature specification, the explainer warns.
+
 ## Legacy and fixed behaviour
 
 * `implementation='legacy'` reproduces the original (2018) implementation of the
