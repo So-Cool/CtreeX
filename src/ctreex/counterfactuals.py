@@ -26,6 +26,7 @@ Data structures
     order of importance (see :func:`rank_counterfactuals`).
 """
 import logging
+import math
 
 import numpy as np
 
@@ -34,7 +35,8 @@ from ctreex.features import NUMERICAL
 
 __all__ = ['support_set', 'support_set_metric', 'volatility_index',
            'grow_region', 'extract_counterfactuals', 'rank_counterfactuals',
-           'describe_counterfactuals', 'describe_range', 'MissingDistance']
+           'describe_counterfactuals', 'describe_range',
+           'describe_integer_range', 'MissingDistance']
 
 logger = logging.getLogger(__name__)
 
@@ -353,7 +355,32 @@ def describe_range(interval):
     raise ValueError('Incorrectly formatted interval: {!r}.'.format(interval))
 
 
-def describe_counterfactuals(counterfactuals, spec):
+def describe_integer_range(interval):
+    """
+    Describes an interval of an integer feature with whole numbers.
+
+    The interval ``(lower, upper]`` of an integer feature contains the whole
+    numbers from ``floor(lower) + 1`` to ``floor(upper)``; e.g.,
+    ``(954.5, 1181.5]`` is described as ``'between 955 and 1181'``,
+    ``(None, 883.0]`` as ``'at most 883'`` and ``(22.5, None)`` as
+    ``'at least 23'``.
+    """
+    lower, upper = interval[0], interval[1]
+    low = None if lower is None else math.floor(float(lower)) + 1
+    high = None if upper is None else math.floor(float(upper))
+    if low is None and high is not None:
+        return 'at most {}'.format(high)
+    if low is not None and high is None:
+        return 'at least {}'.format(low)
+    if low is not None and high is not None:
+        if low == high:
+            return 'exactly {}'.format(low)
+        if low < high:
+            return 'between {} and {}'.format(low, high)
+    return describe_range(interval)
+
+
+def describe_counterfactuals(counterfactuals, spec, integer_ranges=False):
     """
     Translates counterfactuals into human-readable values.
 
@@ -366,6 +393,9 @@ def describe_counterfactuals(counterfactuals, spec):
         ``{key: {feature: {'is': ..., 'wannabe': ...}}}`` (e.g. the output of
         :func:`rank_counterfactuals`).
     spec : ctreex.features.FeatureSpec
+    integer_ranges : bool
+        Describe the ranges of integer features (``Feature.integer``) with
+        whole numbers (:func:`describe_integer_range`).
     """
     translation = {}
     for key, features in counterfactuals.items():
@@ -373,8 +403,11 @@ def describe_counterfactuals(counterfactuals, spec):
         for feature_id, cf in features.items():
             feature = spec.features[feature_id]
             if feature.kind == NUMERICAL:
+                describe = (describe_integer_range
+                            if integer_ranges and feature.integer
+                            else describe_range)
                 entry = {'is': list(cf['is']),
-                         'wannabe': [describe_range(i) for i in cf['wannabe']]}
+                         'wannabe': [describe(i) for i in cf['wannabe']]}
             else:
                 entry = {'is': [feature.describe_value(i) for i in cf['is']],
                          'wannabe': [feature.describe_value(i)

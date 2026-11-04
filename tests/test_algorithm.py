@@ -127,3 +127,27 @@ def test_plots(explainer):
                            ytick=True) is not None
     assert leaf_metric_barplot(2, matrix, ids, classes) is not None
     assert leaf_metric_histogram(2, matrix, ids, classes) is not None
+
+
+def test_integer_ranges(toy_tree):
+    from ctreex import Feature, FeatureSpec
+    from ctreex.counterfactuals import describe_integer_range
+    assert describe_integer_range([None, '883.0']) == 'at most 883'
+    assert describe_integer_range(['954.5', '1181.5']) == \
+        'between 955 and 1181'
+    assert describe_integer_range(['22.5', None]) == 'at least 23'
+    assert describe_integer_range(('22.5', '23.5')) == 'exactly 23'
+    assert describe_integer_range(['22.1', '22.9']) == \
+        'between 22.1 and 22.9'  # no whole number inside
+    spec = FeatureSpec.from_column_names(
+        ['age', 'job_a', 'job_b', 'job_c'],
+        features=[Feature('age', 'numerical', integer=True)])
+    explainer = TreeCounterfactualExplainer(toy_tree, spec)
+    ranked = explainer.explain_instance(
+        spec.encode({'age': 25, 'job': 'b'})).at_distance(1).ranked
+    assert explainer.describe(ranked)[1]['age']['wannabe'] == \
+        ['between 30.0 and 50.0']
+    assert explainer.describe(ranked, integer_ranges=True)[1]['age'][
+        'wannabe'] == ['between 31 and 50']
+    with pytest.raises(ValueError):
+        Feature('job', 'categorical', integer=True)

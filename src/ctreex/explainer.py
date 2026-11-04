@@ -258,7 +258,8 @@ class TreeCounterfactualExplainer(object):
             meta_features=instance, leaf_distances=leaf_distances,
             support=support, counterfactuals=found)
 
-    def describe(self, counterfactuals):
+    def describe(self, counterfactuals, integer_ranges=False):
         """Human-readable version of counterfactuals (see
         :func:`ctreex.counterfactuals.describe_counterfactuals`)."""
-        return cfs.describe_counterfactuals(counterfactuals, self.spec)
+        return cfs.describe_counterfactuals(counterfactuals, self.spec,
+                                            integer_ranges=integer_ranges)

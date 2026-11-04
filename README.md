@@ -166,6 +166,11 @@ uv sync --group notebooks && uv run jupyter lab notebooks/
   to the right child, which could disagree with scikit-learn.
   `explain_instance` rejects data points with missing values with a clear
   error (counterfactuals of missing values are not defined yet).
+* **Whole numbers.**
+  `Feature(..., integer=True)` marks numerical features that take whole
+  values; `describe(..., integer_ranges=True)` then describes their ranges
+  with whole numbers, e.g., `'between 955 and 1181'` instead of
+  `'between 954.5 and 1181.5'` (`ctreex.counterfactuals.describe_integer_range`).
 * **Documentation.**
   How leaves describe numerical features is documented more accurately:
   an interval is `1` when it lies inside the region the leaf's path allows

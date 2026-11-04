@@ -34,16 +34,23 @@ class Feature(object):
         Human-readable name (defaults to ``name``).
     value_names : dict
         Human-readable names of the categories (defaults to the categories).
+    integer : bool
+        Whether a numerical feature takes only whole values; its ranges can
+        then be described with whole numbers (see
+        :func:`ctreex.counterfactuals.describe_counterfactuals`).
     """
     name: str
     kind: str
     values: list = dataclasses.field(default_factory=list)
     display_name: str = None
     value_names: dict = dataclasses.field(default_factory=dict)
+    integer: bool = False
 
     def __post_init__(self):
         if self.kind not in (NUMERICAL, CATEGORICAL):
             raise ValueError('Unknown feature kind: {!r}.'.format(self.kind))
+        if self.integer and self.kind != NUMERICAL:
+            raise ValueError('Only numerical features can be integers.')
         if self.display_name is None:
             self.display_name = self.name
 
