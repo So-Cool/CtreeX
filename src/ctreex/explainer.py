@@ -35,6 +35,11 @@ __all__ = ['TreeCounterfactualExplainer', 'CounterfactualExplanation',
 logger = logging.getLogger(__name__)
 
 
+def _python(value):
+    """Converts numpy scalars (e.g., class labels) to Python objects."""
+    return value.item() if isinstance(value, np.generic) else value
+
+
 @dataclasses.dataclass
 class DistanceCounterfactuals(object):
     """
@@ -50,11 +55,19 @@ class DistanceCounterfactuals(object):
         ``{feature: [leaf ids]}``.
     ranked : dict
         ``{rank: {feature: {'is': [...], 'wannabe': [...]}}}``.
+    leaf_classes : dict
+        ``{leaf id: class}`` -- the class every leaf of ``per_leaf`` predicts.
+    ranked_classes : dict
+        ``{rank: [classes]}`` -- the classes a ranked counterfactual leads to
+        (a single class unless counterfactuals of different classes were
+        merged, see the ``per_class_ranking`` fix).
     """
     distance: int
     per_leaf: dict
     per_feature: dict
     ranked: dict
+    leaf_classes: dict = dataclasses.field(default_factory=dict)
+    ranked_classes: dict = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass
@@ -98,8 +111,20 @@ class CounterfactualExplanation(object):
                 return c
         return None
 
-    def ranked(self):
-        """All ranked counterfactuals as ``(distance, counterfactual)``."""
+    def ranked(self, with_classes=False):
+        """
+        All ranked counterfactuals.
+
+        Returns
+        -------
+        list
+            ``(distance, counterfactual)`` pairs, or ``(distance, classes,
+            counterfactual)`` triples with ``with_classes``.
+        """
+        if with_classes:
+            return [(c.distance, c.ranked_classes[rank], cf)
+                    for c in self.counterfactuals
+                    for rank, cf in c.ranked.items()]
         return [(c.distance, cf) for c in self.counterfactuals
                 for cf in c.ranked.values()]
 
@@ -205,7 +230,7 @@ class TreeCounterfactualExplainer(object):
         return self._leaf_distance_matrix, lmf.leaf_ids, lmf.leaf_classes
 
     def explain_instance(self, x, instance_values=None, max_distance=None,
-                         excluded=(), included=()):
+                         excluded=(), included=(), target_class=None):
         """
         Computes the counterfactuals of a data point.
 
@@ -223,6 +248,9 @@ class TreeCounterfactualExplainer(object):
             Base features that must not (only these may) appear in the
             counterfactuals (see the whole_counterfactual_restrictions
             fix in :mod:`ctreex.fixes`).
+        target_class : object, optional
+            Explain only how to reach this class (multi-class trees); by
+            default counterfactuals lead to any other class.
 
         Returns
         -------
@@ -246,29 +274,52 @@ class TreeCounterfactualExplainer(object):
 
         if max_distance is None:
             max_distance = self.spec.n_features
+        if target_class is not None:
+            if target_class not in set(lmf.leaf_classes.tolist()):
+                raise ValueError('Unknown target class: {!r}.'.format(
+                    target_class))
+            if target_class == prediction:
+                raise ValueError('The target class has to differ from the '
+                                 'prediction ({!r}).'.format(prediction))
         found = []
         for distance in range(1, max_distance + 1):
             try:
                 per_leaf, per_feature = cfs.extract_counterfactuals(
                     lmf, instance, instance_values, support, self.spec,
                     distance=distance, excluded=excluded, included=included,
-                    whole_restrictions=self.fixes.whole_counterfactual_restrictions)
+                    whole_restrictions=self.fixes.whole_counterfactual_restrictions,
+                    target_class=target_class)
             except cfs.MissingDistance:
                 if self.fixes.continue_past_missing_distance:
                     continue
                 break
-            ranked = cfs.rank_counterfactuals(
+            leaf_classes = {leaf: _python(lmf.leaf_classes[lmf.leaf_index(
+                leaf)]) for leaf in per_leaf}
+            ranked, sources = cfs.rank_counterfactuals(
                 per_leaf, per_feature, distance,
-                deterministic_order=self.fixes.deterministic_order)
-            found.append(DistanceCounterfactuals(distance, per_leaf,
-                                                 per_feature, ranked))
+                deterministic_order=self.fixes.deterministic_order,
+                leaf_classes=(leaf_classes if self.fixes.per_class_ranking
+                              else None),
+                return_sources=True)
+            ranked_classes = {
+                rank: list(dict.fromkeys(leaf_classes[leaf]
+                                         for leaf in leaves))
+                for rank, leaves in sources.items()}
+            found.append(DistanceCounterfactuals(
+                distance, per_leaf, per_feature, ranked,
+                leaf_classes=leaf_classes, ranked_classes=ranked_classes))
         return CounterfactualExplanation(
             leaf=leaf, prediction=prediction, instance_values=instance_values,
             meta_features=instance, leaf_distances=leaf_distances,
             support=support, counterfactuals=found)
 
     def describe(self, counterfactuals, integer_ranges=False):
-        """Human-readable version of counterfactuals (see
-        :func:`ctreex.counterfactuals.describe_counterfactuals`)."""
-        return cfs.describe_counterfactuals(counterfactuals, self.spec,
-                                            integer_ranges=integer_ranges)
+        """
+        Human-readable version of counterfactuals (see
+        :func:`ctreex.counterfactuals.describe_counterfactuals`).
+
+        Thresholds are shortened according to the ``short_thresholds`` fix.
+        """
+        return cfs.describe_counterfactuals(
+            counterfactuals, self.spec, integer_ranges=integer_ranges,
+            short_thresholds=self.fixes.short_thresholds)

@@ -36,7 +36,7 @@ from ctreex.features import NUMERICAL
 __all__ = ['support_set', 'support_set_metric', 'volatility_index',
            'grow_region', 'extract_counterfactuals', 'rank_counterfactuals',
            'describe_counterfactuals', 'describe_range',
-           'describe_integer_range', 'MissingDistance']
+           'describe_integer_range', 'format_bound', 'MissingDistance']
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +185,8 @@ def grow_region(interval, intervals):
 
 def extract_counterfactuals(lmf, instance, instance_values, support, spec,
                             distance=1, excluded=(), included=(), exact=True,
-                            counterfactual=True, whole_restrictions=False):
+                            counterfactual=True, whole_restrictions=False,
+                            target_class=None):
     """
     Extracts the counterfactuals of a data point at a given distance.
 
@@ -204,6 +205,9 @@ def extract_counterfactuals(lmf, instance, instance_values, support, spec,
     excluded, included : collections.abc.Collection
         Base features that must not be (only these may be) part of a
         counterfactual; an empty ``included`` allows all features.
+    target_class : object, optional
+        Use only the leaves of this class (counterfactuals towards a specific
+        class of a multi-class tree).
     whole_restrictions : bool
         How ``excluded`` and ``included`` are applied. When ``True``, a leaf
         is used only if *all* the features that have to change to reach it
@@ -233,6 +237,9 @@ def extract_counterfactuals(lmf, instance, instance_values, support, spec,
     if distance not in support:
         raise MissingDistance(distance)
     leaves = support[distance][side]
+    if target_class is not None:
+        leaves = [leaf for leaf in leaves
+                  if lmf.leaf_classes[lmf.leaf_index(leaf)] == target_class]
 
     per_leaf, per_feature = {}, {}
     for leaf in leaves:
@@ -284,8 +291,32 @@ def extract_counterfactuals(lmf, instance, instance_values, support, spec,
     return per_leaf, per_feature
 
 
+def _merge(per_leaf, leaves, feature, deterministic_order):
+    """Merges the counterfactuals of one feature across leaves."""
+    current, wannabe = [], []
+    numerical = False
+    for leaf in leaves:
+        current += per_leaf[leaf][feature]['is']
+        wannabe += per_leaf[leaf][feature]['wannabe']
+        if isinstance(per_leaf[leaf][feature]['wannabe'][0], list):
+            numerical = True
+    current = _unique(current, deterministic_order)
+    if numerical:
+        merged = []
+        while wannabe:
+            c = list(wannabe.pop())
+            c, wannabe = grow_region(c, wannabe)
+            merged.append(c)
+        wannabe = sorted(merged, key=lambda x: float(
+            x[0] if x[0] is not None else 0))
+    else:
+        wannabe = _unique(wannabe, deterministic_order)
+    return {feature: {'is': current, 'wannabe': wannabe}}
+
+
 def rank_counterfactuals(per_leaf, per_feature, distance,
-                         deterministic_order=False):
+                         deterministic_order=False, leaf_classes=None,
+                         return_sources=False):
     """
     Orders counterfactuals by importance.
 
@@ -300,52 +331,94 @@ def rank_counterfactuals(per_leaf, per_feature, distance,
     deterministic_order : bool
         Remove duplicated categories keeping their order (instead of the
         hash-dependent ``list(set(...))`` of the original implementation).
+    leaf_classes : dict, optional
+        ``{leaf id: class}``. When given, counterfactuals are merged and
+        scored per class; at distance 1 the leaves of different classes
+        are not merged, and features are scored by the leaves of the same
+        class. Without it all leaves are treated alike (the original
+        implementation); for two classes the results are identical.
+    return_sources : bool
+        Also return the leaves every ranked counterfactual comes from.
 
     Returns
     -------
-    dict
+    counterfactuals : dict
         ``{rank: {feature: {'is': [...], 'wannabe': [...]}}}``.
+    sources : dict
+        ``{rank: [leaf ids]}`` (only with ``return_sources``).
     """
-    frequency = {f: len(leaves) for f, leaves in per_feature.items()}
-    counterfactuals = {}
-    if distance == 1:
-        order = sorted([(frequency[f], f) for f in frequency],
-                       key=lambda x: x[0], reverse=True)
-        for counter, (_, feature) in enumerate(order):
-            current, wannabe = [], []
-            numerical = False
-            for leaf in per_feature[feature]:
-                current += per_leaf[leaf][feature]['is']
-                wannabe += per_leaf[leaf][feature]['wannabe']
-                if isinstance(per_leaf[leaf][feature]['wannabe'][0], list):
-                    numerical = True
-            current = _unique(current, deterministic_order)
-            if numerical:
-                merged = []
-                while wannabe:
-                    c = list(wannabe.pop())
-                    c, wannabe = grow_region(c, wannabe)
-                    merged.append(c)
-                wannabe = sorted(merged, key=lambda x: float(
-                    x[0] if x[0] is not None else 0))
-            else:
-                wannabe = _unique(wannabe, deterministic_order)
-            counterfactuals[counter] = {feature: {'is': current,
-                                                  'wannabe': wannabe}}
-        return counterfactuals
+    def class_of(leaf):
+        return None if leaf_classes is None else leaf_classes[leaf]
 
-    logger.debug('Feature frequencies: %s', frequency)
-    importance = [(sum(frequency[f] for f in per_leaf[leaf]), leaf)
-                  for leaf in per_leaf]
-    for counter, (_, leaf) in enumerate(
-            sorted(importance, key=lambda x: x[0], reverse=True)):
-        counterfactuals[counter] = per_leaf[leaf]
+    # (class, feature) -> leaves, in order of the features and leaves
+    groups = {}
+    for feature, leaves in per_feature.items():
+        for leaf in leaves:
+            groups.setdefault((class_of(leaf), feature), []).append(leaf)
+    frequency = {key: len(leaves) for key, leaves in groups.items()}
+
+    counterfactuals, sources = {}, {}
+    if distance == 1:
+        order = sorted([(frequency[key], key) for key in frequency],
+                       key=lambda x: x[0], reverse=True)
+        for counter, (_, key) in enumerate(order):
+            counterfactuals[counter] = _merge(per_leaf, groups[key], key[1],
+                                              deterministic_order)
+            sources[counter] = list(groups[key])
+    else:
+        logger.debug('Feature frequencies: %s', frequency)
+        importance = [(sum(frequency[(class_of(leaf), f)]
+                           for f in per_leaf[leaf]), leaf)
+                      for leaf in per_leaf]
+        for counter, (_, leaf) in enumerate(
+                sorted(importance, key=lambda x: x[0], reverse=True)):
+            counterfactuals[counter] = per_leaf[leaf]
+            sources[counter] = [leaf]
+    if return_sources:
+        return counterfactuals, sources
     return counterfactuals
 
 
-def describe_range(interval):
-    """Describes an interval, e.g. ``'between 22.5 and 30.5'``."""
+def format_bound(bound, short=False):
+    """
+    Formats an interval bound (a threshold) for humans.
+
+    Parameters
+    ----------
+    bound : str
+        The threshold as stored in the meta-features (e.g.,
+        ``'0.800000011920929'``).
+    short : bool
+        Use the shortest form of the largest 32-bit floating point number not
+        exceeding the threshold (e.g., ``'0.8'``) when it is shorter.
+        scikit-learn compares 32-bit data with the thresholds, so for its
+        trees ``x <= t`` and ``x <= 0.8`` select the same data; thresholds
+        that are not shorter in this form (e.g., ``'0.1'`` of a tree
+        working with 64-bit data) are kept. A threshold just below a round
+        number keeps that precision: ``0.8499999940395355`` becomes
+        ``'0.84999996'`` (not ``'0.85'``) since the tree sends ``0.85`` to the
+        right.
+    """
+    if not short:
+        return bound
+    value = float(bound)
+    single = np.float32(value)
+    if float(single) > value:  # round towards minus infinity
+        single = np.nextafter(single, np.float32(-np.inf))
+    text = str(single)
+    return text if len(text) < len(bound) else bound
+
+
+def describe_range(interval, short=False):
+    """
+    Describes an interval, e.g. ``'between 22.5 and 30.5'``.
+
+    ``short`` formats the bounds with :func:`format_bound`.
+    """
     lower, upper = interval[0], interval[1]
+    if short:
+        lower = None if lower is None else format_bound(lower, short=True)
+        upper = None if upper is None else format_bound(upper, short=True)
     if lower is None and upper is not None:
         return 'less or equal to {}'.format(upper)
     if lower is not None and upper is None:
@@ -380,7 +453,8 @@ def describe_integer_range(interval):
     return describe_range(interval)
 
 
-def describe_counterfactuals(counterfactuals, spec, integer_ranges=False):
+def describe_counterfactuals(counterfactuals, spec, integer_ranges=False,
+                             short_thresholds=False):
     """
     Translates counterfactuals into human-readable values.
 
@@ -396,6 +470,9 @@ def describe_counterfactuals(counterfactuals, spec, integer_ranges=False):
     integer_ranges : bool
         Describe the ranges of integer features (``Feature.integer``) with
         whole numbers (:func:`describe_integer_range`).
+    short_thresholds : bool
+        Format the thresholds of the other numerical ranges in their shortest
+        form (:func:`format_bound`).
     """
     translation = {}
     for key, features in counterfactuals.items():
@@ -403,11 +480,13 @@ def describe_counterfactuals(counterfactuals, spec, integer_ranges=False):
         for feature_id, cf in features.items():
             feature = spec.features[feature_id]
             if feature.kind == NUMERICAL:
-                describe = (describe_integer_range
-                            if integer_ranges and feature.integer
-                            else describe_range)
-                entry = {'is': list(cf['is']),
-                         'wannabe': [describe(i) for i in cf['wannabe']]}
+                if integer_ranges and feature.integer:
+                    wannabe = [describe_integer_range(i)
+                               for i in cf['wannabe']]
+                else:
+                    wannabe = [describe_range(i, short=short_thresholds)
+                               for i in cf['wannabe']]
+                entry = {'is': list(cf['is']), 'wannabe': wannabe}
             else:
                 entry = {'is': [feature.describe_value(i) for i in cf['is']],
                          'wannabe': [feature.describe_value(i)

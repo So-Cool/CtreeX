@@ -15,7 +15,7 @@ from ctreex.features import Feature, FeatureSpec
 from ctreex.fixes import Fixes
 from ctreex.tree import TreeStructure, load_tree
 
-__version__ = '0.0.2'
+__version__ = '0.0.3'
 
 __all__ = ['TreeCounterfactualExplainer', 'CounterfactualExplanation',
            'DistanceCounterfactuals', 'Feature', 'FeatureSpec', 'Fixes',

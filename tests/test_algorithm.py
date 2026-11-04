@@ -151,3 +151,39 @@ def test_integer_ranges(toy_tree):
         'wannabe'] == ['between 31 and 50']
     with pytest.raises(ValueError):
         Feature('job', 'categorical', integer=True)
+
+
+def test_short_thresholds():
+    from ctreex.counterfactuals import describe_range, format_bound
+    assert format_bound('0.800000011920929', short=True) == '0.8'
+    assert format_bound('4.950000047683716', short=True) == '4.95'
+    for kept in ('954.5', '883.0', '0.1', '2250.0', '1e+20'):
+        assert format_bound(kept, short=True) == kept
+    assert format_bound('0.800000011920929') == '0.800000011920929'
+    assert describe_range(['0.800000011920929', '1.75'], short=True) == \
+        'between 0.8 and 1.75'
+    # the shortened bound selects the same 32-bit data as the threshold
+    for text in ('0.800000011920929', '4.950000047683716',
+                 '4.8500001430511475'):
+        threshold = float(text)
+        short = np.float32(float(format_bound(text, short=True)))
+        below = np.nextafter(short, np.float32(np.inf))
+        assert float(short) <= threshold < float(below)
+
+
+def test_short_thresholds_switch():
+    sklearn_tree = pytest.importorskip('sklearn.tree')
+    X = np.array([[0.6], [0.7], [1.0], [1.2]], dtype=np.float32)
+    clf = sklearn_tree.DecisionTreeClassifier(random_state=0).fit(
+        X, ['a', 'a', 'b', 'b'])
+    # the threshold, 0.8499999940395355, lies just below the 32-bit 0.85
+    # (0.85 goes right), hence the largest 32-bit number below it is shown
+    for implementation, expected in (('fixed', 'more than 0.84999996'),
+                                     ('legacy', 'more than 0.8499999940395355')):
+        explainer = TreeCounterfactualExplainer(clf, ['x'],
+                                                implementation=implementation)
+        ranked = explainer.explain_instance(np.array([0.6])).counterfactuals[
+            0].ranked
+        assert explainer.describe(ranked)[0]['x']['wannabe'] == [expected]
+    assert clf.apply(np.array([[0.85]], dtype=np.float32))[0] == \
+        clf.apply(np.array([[1.2]], dtype=np.float32))[0]

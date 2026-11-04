@@ -67,12 +67,28 @@ class Fixes(object):
         some alternative categories are not listed. When ``True``,
         meta-features are created for all the categories of every categorical
         feature used by the tree. The leaf-to-leaf distances change as well.
+    per_class_ranking : bool
+        At distance 1 the original implementation merges the counterfactuals
+        of every feature across all leaves; for multi-class trees also
+        across leaves of *different* classes, so a merged range (e.g.,
+        "more than 9.5") can lead to different classes. When ``True``,
+        counterfactuals are merged and scored per class. Two-class trees are
+        not affected.
+    short_thresholds : bool
+        scikit-learn computes the thresholds of 32-bit data, which are then
+        described in full (e.g., ``more than 0.800000011920929``). When
+        ``True``, :meth:`TreeCounterfactualExplainer.describe` uses the
+        shortest form of the largest 32-bit number not exceeding a threshold
+        whenever it is shorter (``more than 0.8``); it selects the same
+        data. Only the descriptions change.
     """
     deterministic_order: bool = True
     continue_past_missing_distance: bool = True
     complete_numerical_intervals: bool = True
     whole_counterfactual_restrictions: bool = True
     complete_categorical_features: bool = True
+    per_class_ranking: bool = True
+    short_thresholds: bool = True
 
     @classmethod
     def legacy(cls):

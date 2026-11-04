@@ -277,3 +277,60 @@ def test_feature_names_check(toy_tree, toy_spec):
     with pytest.warns(UserWarning):
         TreeCounterfactualExplainer(toy_tree, ['age', 'job_x', 'job_y',
                                                'job_z'])
+
+
+@pytest.fixture
+def three_classes():
+    sklearn_tree = pytest.importorskip('sklearn.tree')
+    X = np.arange(30, dtype=float).reshape(-1, 1)
+    y = np.repeat(['low', 'mid', 'high'], 10)
+    return sklearn_tree.DecisionTreeClassifier(random_state=0).fit(X, y)
+
+
+def test_multi_class(three_classes):
+    x = np.array([5.])
+    fixed = TreeCounterfactualExplainer(three_classes, ['x'])
+    e = fixed.explain_instance(x)
+    assert e.prediction == 'low'
+    found = e.at_distance(1)
+    assert sorted(found.leaf_classes.values()) == ['high', 'mid']
+    # one counterfactual per class
+    described = {tuple(classes): fixed.describe({0: cf})[0]['x']['wannabe']
+                 for _, classes, cf in e.ranked(with_classes=True)}
+    assert described == {('mid',): ['between 9.5 and 19.5'],
+                         ('high',): ['more than 19.5']}
+    # the legacy implementation merges the leaves of both classes
+    legacy = TreeCounterfactualExplainer(three_classes, ['x'],
+                                         implementation='legacy')
+    merged = legacy.explain_instance(x).ranked(with_classes=True)
+    assert len(merged) == 1
+    distance, classes, cf = merged[0]
+    assert sorted(classes) == ['high', 'mid']
+    assert legacy.describe({0: cf})[0]['x']['wannabe'] == ['more than 9.5']
+
+
+def test_target_class(three_classes):
+    explainer = TreeCounterfactualExplainer(three_classes, ['x'])
+    x = np.array([5.])
+    e = explainer.explain_instance(x, target_class='high')
+    assert [(d, classes) for d, classes, _ in e.ranked(with_classes=True)] \
+        == [(1, ['high'])]
+    assert explainer.describe(e.counterfactuals[0].ranked)[0]['x'][
+        'wannabe'] == ['more than 19.5']
+    with pytest.raises(ValueError):
+        explainer.explain_instance(x, target_class='low')  # the prediction
+    with pytest.raises(ValueError):
+        explainer.explain_instance(x, target_class='very high')
+
+
+def test_per_class_ranking_two_classes():
+    # with two classes per-class ranking changes nothing
+    case = load_case('single_threshold_case.json')
+    per_class = TreeCounterfactualExplainer(case['tree'])
+    together = TreeCounterfactualExplainer(
+        case['tree'], fixes={'per_class_ranking': False})
+    for x in np.array(case['X']):
+        a, b = per_class.explain_instance(x), together.explain_instance(x)
+        assert a.ranked(with_classes=True) == b.ranked(with_classes=True)
+        assert all(len(classes) == 1
+                   for _, classes, _ in a.ranked(with_classes=True))

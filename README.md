@@ -13,13 +13,13 @@ It depends only on `numpy`.
 Python 3.9 or newer is required.
 
 ```sh
-pip install "ctreex @ git+https://github.com/So-Cool/ctreex.git@v0.0.2"
+pip install "ctreex @ git+https://github.com/So-Cool/ctreex.git@v0.0.3"
 ```
 
 or with the scikit-learn helpers and the plots
 
 ```sh
-pip install "ctreex[sklearn,plot] @ git+https://github.com/So-Cool/ctreex.git@v0.0.2"
+pip install "ctreex[sklearn,plot] @ git+https://github.com/So-Cool/ctreex.git@v0.0.3"
 ```
 
 ## Quick start
@@ -81,6 +81,10 @@ Counterfactuals can be restricted:
 * `excluded=['age']` -- never change these features; and
 * `included=['income']` -- change only these features.
 
+For multi-class trees, `target_class='...'` restricts the counterfactuals to
+one class, and `explanation.ranked(with_classes=True)` reports the class each
+counterfactual leads to.
+
 The leaf-to-leaf distance matrix (`explainer.leaf_distance_matrix()`), its
 heat map and histograms (`ctreex.plot`) and the *volatility index* of a leaf
 -- i.e., how close it is to leaves of other classes
@@ -91,7 +95,7 @@ tree as a whole.
 
 | Object | Purpose |
 |---|---|
-| `TreeCounterfactualExplainer(model, feature_spec, implementation, fixes, class_names)` | the explainer; `explain_instance(x, instance_values, max_distance, excluded, included)` returns a `CounterfactualExplanation` |
+| `TreeCounterfactualExplainer(model, feature_spec, implementation, fixes, class_names)` | the explainer; `explain_instance(x, instance_values, max_distance, excluded, included, target_class)` returns a `CounterfactualExplanation` |
 | `CounterfactualExplanation` | `prediction`, `leaf`, `leaf_distances`, `support` (leaves per distance), `counterfactuals` (one `DistanceCounterfactuals` per distance), `ranked()`, `at_distance(d)` |
 | `FeatureSpec`, `Feature` | maps the columns of a one-hot encoded array to features; display names and category names; `encode`/`decode` |
 | `TreeStructure`, `load_tree` | a fitted tree independent of scikit-learn: from scikit-learn, to/from JSON, from pickles |
@@ -134,6 +138,32 @@ uv sync --group notebooks && uv run jupyter lab notebooks/
 ```
 
 ## Changelog
+
+### 0.0.3
+
+* **Multi-class trees.**
+  `explain_instance(..., target_class=...)` explains how to reach a given
+  class; by default counterfactuals lead to any other class.
+  Every `DistanceCounterfactuals` records the class of each leaf
+  (`leaf_classes`) and the classes each ranked counterfactual leads to
+  (`ranked_classes`); `explanation.ranked(with_classes=True)` returns
+  `(distance, classes, counterfactual)` triples.
+* **New fix: distinguish counterfactuals of different classes.**
+  `per_class_ranking` (enabled by `implementation='fixed'`):
+  at distance 1 counterfactuals are merged and scored per class.
+  The legacy implementation merged the counterfactuals of a feature across
+  leaves of *different* classes, so a merged range (e.g., "more than 9.5")
+  could lead to different classes, which the explanation did not show.
+  Two-class trees are not affected.
+* **New fix: display shorter threshold descriptions.**
+  `short_thresholds` (enabled by `implementation='fixed'`):
+  `describe` shows thresholds in their shortest equivalent form.
+  scikit-learn computes the thresholds of 32-bit data, which were described
+  in full, e.g., `'more than 0.800000011920929'`;
+  the largest 32-bit number not exceeding a threshold selects the same data,
+  and its shortest form is used when it is shorter (`'more than 0.8'`;
+  `ctreex.counterfactuals.format_bound`).
+  Only the descriptions change; thresholds such as `954.5` or `0.1` are kept.
 
 ### 0.0.2
 
@@ -235,6 +265,8 @@ which was based on pandas and seaborn.
 | `continue_past_missing_distance` | the search stopped at the first distance at which no leaf exists, e.g. with leaves at distances 1 and 3 only the distance-3 counterfactuals were never found | missing distances are skipped |
 | `complete_numerical_intervals` (0.0.2) | a numerical feature split at a single threshold `t` had only the `A<=t` meta-feature | both `A<=t` and `t<A` |
 | `complete_categorical_features` (0.0.2) | meta-features only for the categories the tree splits on; leaves could require a category although others were allowed | meta-features for all the categories of the features used by the tree |
+| `short_thresholds` (0.0.3) | thresholds of 32-bit data described in full (`0.800000011920929`) | shortest equivalent form (`0.8`) |
+| `per_class_ranking` (0.0.3) | distance-1 counterfactuals of a feature were merged across leaves of different classes (multi-class trees) | merged and scored per class |
 | `whole_counterfactual_restrictions` (0.0.2) | `excluded`/`included` features were removed from every counterfactual, leaving incomplete and empty counterfactuals | leaves whose counterfactual needs a forbidden feature are skipped |
 
 Select individual fixes with `fixes={'deterministic_order': False}` or a
