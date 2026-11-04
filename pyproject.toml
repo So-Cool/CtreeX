@@ -1,0 +1,64 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ctreex"
+version = "0.0.1"
+description = "CtreeX: Counterfactual explainer of decision trees"
+readme = "README.md"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+authors = [{ name = "Kacper Sokol", email = "k.sokol@bristol.ac.uk" }]
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.22",
+]
+keywords = [
+    "explainability",
+    "interpretability",
+    "counterfactuals",
+    "decision trees",
+    "XAI",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.optional-dependencies]
+sklearn = [
+    "scikit-learn>=1.0",
+    "joblib>=1.0",
+]
+plot = [
+    "matplotlib>=3.5",
+]
+
+[project.urls]
+Homepage = "https://github.com/So-Cool/CtreeX"
+
+[dependency-groups]
+dev = [
+    "pytest>=7",
+    "scikit-learn>=1.0",
+    "joblib>=1.0",
+    "matplotlib>=3.5",
+]
+notebooks = [
+    "scikit-learn>=1.0",
+    "matplotlib>=3.5",
+    "jupyterlab>=4",
+    "ipykernel>=6",
+    "nbconvert>=7",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ctreex"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

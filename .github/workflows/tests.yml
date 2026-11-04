@@ -1,0 +1,40 @@
+name: tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install
+        run: uv sync --locked --python ${{ matrix.python-version }}
+      - name: Test
+        run: uv run --python ${{ matrix.python-version }} pytest -v
+
+  notebooks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install
+        run: uv sync --locked --group notebooks
+      - name: Cache the UCI German Credit data
+        uses: actions/cache@v4
+        with:
+          path: notebooks/german.data
+          key: uci-german-credit-v1
+      - name: Run the notebooks
+        run: |
+          for notebook in notebooks/*.ipynb; do
+            uv run jupyter nbconvert --to notebook --execute --output /tmp/out.ipynb "$notebook"
+          done

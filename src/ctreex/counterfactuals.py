@@ -1,0 +1,367 @@
+"""
+Extraction, ranking and description of counterfactuals.
+
+A counterfactual of a data point is a set of feature changes that move the
+data point into a leaf of a different class.
+Leaves are grouped by their (exact) distance to the data point -- i.e.,
+the number of features that need to change -- and the conditions of every
+opposite-class leaf at a given distance are turned into counterfactuals.
+
+Numpy reimplementation of the original ``get_leaf_support_set_instance``,
+``get_leaf_support_set_metric``, ``volatility_index``, ``grow_region``,
+``get_contrastives``, ``transform_counterfactuals`` and ``translate``.
+
+Data structures
+---------------
+``per_leaf``
+    ``{leaf id: {feature: {'is': [current value], 'wannabe': [...]}}}`` --
+    for numerical features ``wannabe`` holds ``[lower, upper]`` intervals
+    (strings or ``None`` for unbounded), for categorical features the
+    alternative categories.
+``per_feature``
+    ``{feature: [leaf ids]}`` -- the leaves whose counterfactual uses the
+    feature.
+``ranked``
+    ``{rank: {feature: {'is': ..., 'wannabe': ...}}}`` -- counterfactuals in
+    order of importance (see :func:`rank_counterfactuals`).
+"""
+import logging
+
+import numpy as np
+
+from ctreex.distances import similarity
+from ctreex.features import NUMERICAL
+
+__all__ = ['support_set', 'support_set_metric', 'volatility_index',
+           'grow_region', 'extract_counterfactuals', 'rank_counterfactuals',
+           'describe_counterfactuals', 'describe_range', 'MissingDistance']
+
+logger = logging.getLogger(__name__)
+
+
+class MissingDistance(KeyError):
+    """No leaf lies at the requested distance from the data point."""
+
+
+def _unique(values, deterministic):
+    if deterministic:
+        return list(dict.fromkeys(values))
+    return list(set(values))
+
+
+def support_set(instance_class, distances, leaf_ids, leaf_classes):
+    """
+    Groups the leaves by their distance to a data point.
+
+    Returns
+    -------
+    dict
+        ``{distance: {'same': [leaf ids], 'other': [leaf ids]}}`` where
+        ``same`` (``other``) lists leaves of the same (a different) class;
+        distances are in the order of their first appearance.
+    """
+    distances = np.asarray(distances)
+    out = {}
+    for d in distances.tolist():
+        if int(d) != d:
+            raise ValueError('Exact distances have to be integers.')
+        d = int(d)
+        if d in out:
+            continue
+        selected = distances == d
+        out[d] = {
+            'same': leaf_ids[selected & (leaf_classes == instance_class)]
+            .tolist(),
+            'other': leaf_ids[selected & (leaf_classes != instance_class)]
+            .tolist()}
+    return out
+
+
+def _metric_bins(matrix, bins_step):
+    return np.arange(np.floor(np.min(matrix)),
+                     np.ceil(np.max(matrix)) + bins_step, bins_step)
+
+
+def support_set_metric(leaf, matrix, leaf_ids, leaf_classes, bins_step=0.5):
+    """
+    Groups leaves by their (binned) distance to a given leaf.
+
+    Parameters
+    ----------
+    leaf : int
+        The reference leaf id.
+    matrix : numpy.ndarray
+        Leaf-to-leaf distance matrix (see
+        :func:`ctreex.distances.leaf_distance_matrix`).
+    leaf_ids, leaf_classes : numpy.ndarray
+        Leaf ids and classes describing the rows/columns of ``matrix``.
+    bins_step : float
+        Width of the distance bins.
+
+    Returns
+    -------
+    dict
+        ``{'(low, high]': {'same': [leaf ids], 'other': [leaf ids]}}``.
+    """
+    bins = _metric_bins(matrix, bins_step)
+    bins[0] -= 0.0001
+    labels = ['({}, {}]'.format(bins[i], bins[i + 1])
+              for i in range(len(bins) - 1)]
+    column = matrix[:, int(np.flatnonzero(leaf_ids == leaf)[0])]
+    self_class = leaf_classes[leaf_ids == leaf][0]
+    which = np.searchsorted(bins, column, side='left') - 1
+    out = {}
+    for b, label in enumerate(labels):
+        in_bin = which == b
+        out[label] = {
+            'same': leaf_ids[in_bin & (leaf_classes == self_class)].tolist(),
+            'other': leaf_ids[in_bin & (leaf_classes != self_class)].tolist()}
+    if np.any((which < 0) | (which >= len(labels))):
+        logger.warning('Undiscovered group!')
+    return out
+
+
+def volatility_index(leaf, matrix, leaf_ids, leaf_classes, bins_step=0.5):
+    """
+    Measures how close a leaf is to leaves of other classes.
+
+    The distances from the leaf to all the leaves are binned; for bin ``k``
+    (``k = 1, 2, ...``) the ratio ``(other + 1) / (same + 1)`` -- the numbers
+    of other-class and same-class leaves in the bin -- is weighted by
+    ``1 / k`` and summed.
+    """
+    bins = _metric_bins(matrix, bins_step)
+    column = matrix[:, int(np.flatnonzero(leaf_ids == leaf)[0])]
+    self_class = leaf_classes[leaf_ids == leaf][0]
+    # pandas.cut(..., include_lowest=True) semantics
+    which = np.searchsorted(bins, column, side='left') - 1
+    which[column == bins[0]] = 0
+    same = np.zeros(len(bins) - 1)
+    other = np.zeros(len(bins) - 1)
+    for w, c in zip(which, leaf_classes):
+        if 0 <= w < len(bins) - 1:
+            if c == self_class:
+                same[w] += 1
+            else:
+                other[w] += 1
+    ratio = (other + 1) / (same + 1)
+    return float(sum(r / (k + 1) for k, r in enumerate(ratio)))
+
+
+def grow_region(interval, intervals):
+    """
+    Merges adjacent intervals into ``interval`` (in place).
+
+    Parameters
+    ----------
+    interval : list
+        ``[lower, upper]`` (strings or ``None``).
+    intervals : list
+        Other intervals; the merged ones are removed from this list.
+
+    Returns
+    -------
+    tuple
+        The grown interval and the remaining intervals.
+    """
+    if interval[1] is not None:
+        for i in intervals:
+            i_l, i_u = i
+            if interval[1] == i_l:
+                interval[1] = i_u
+                intervals.remove(i)
+                return grow_region(interval, intervals)
+    if interval[0] is not None:
+        for i in intervals:
+            i_l, i_u = i
+            if interval[0] == i_u:
+                interval[0] = i_l
+                intervals.remove(i)
+                return grow_region(interval, intervals)
+    return interval, intervals
+
+
+def extract_counterfactuals(lmf, instance, instance_values, support, spec,
+                            distance=1, excluded=(), included=(), exact=True,
+                            counterfactual=True):
+    """
+    Extracts the counterfactuals of a data point at a given distance.
+
+    Parameters
+    ----------
+    lmf : ctreex.meta_features.LeafMetaFeatures
+    instance : numpy.ndarray
+        Meta-feature vector of the data point.
+    instance_values : dict
+        Base feature values of the data point (reported as ``'is'``).
+    support : dict
+        Output of :func:`support_set`.
+    spec : ctreex.features.FeatureSpec
+    distance : int
+        Distance of the leaves to use.
+    excluded, included : collections.abc.Collection
+        Base features that must not be (only these may be) part of a
+        counterfactual; an empty ``included`` allows all features.
+    exact : bool
+        Distance flavour used to find the features that differ.
+    counterfactual : bool
+        Use leaves of another class (``True``) or of the same class.
+
+    Returns
+    -------
+    per_leaf : dict
+    per_feature : dict
+
+    Raises
+    ------
+    MissingDistance
+        No leaf lies at the given distance.
+    """
+    if not included:
+        included = [m.feature for m in lmf.meta_features]
+    side = 'other' if counterfactual else 'same'
+    if distance not in support:
+        raise MissingDistance(distance)
+    leaves = support[distance][side]
+
+    per_leaf, per_feature = {}, {}
+    for leaf in leaves:
+        per_leaf[leaf] = {}
+        row = lmf.row(leaf)
+        for group in lmf.groups:
+            kind, feature, indices = group
+            d = similarity([group], row, instance, exact)
+            if d <= 0 or feature in excluded or feature not in included:
+                continue
+            values = row[indices]
+            members = [lmf.meta_features[i] for i in indices]
+            selected = [m for m, v in zip(members, values) if v != -1]
+            if kind == NUMERICAL:
+                if not selected:
+                    # A feature split at a single threshold t has only the
+                    # "A<=t" meta-feature; a leaf with "t<A" has it at -1.
+                    # Swapping the bounds of the excluded intervals yields the
+                    # complementary interval: (t, None) means "more than t".
+                    # (Kept as tuples like the original -- ranking then
+                    # treats them as categories, i.e. de-duplicates them.)
+                    wannabe = [(m.upper, m.lower) for m, v in
+                               zip(members, values) if v == -1]
+                else:
+                    intervals = [(m.lower, m.upper) for m in selected]
+                    wannabe = []
+                    while intervals:
+                        c = list(intervals.pop())
+                        c, intervals = grow_region(c, intervals)
+                        wannabe.append(c)
+            else:
+                if not selected:  # all used categories are excluded
+                    excluded_category = members[0].category
+                    wannabe = [c for c in spec.features[feature].values
+                               if c != excluded_category]
+                else:
+                    wannabe = [m.category for m in selected]
+            per_leaf[leaf][feature] = {'is': [instance_values[feature]],
+                                       'wannabe': wannabe}
+            per_feature.setdefault(feature, []).append(leaf)
+    return per_leaf, per_feature
+
+
+def rank_counterfactuals(per_leaf, per_feature, distance,
+                         deterministic_order=False):
+    """
+    Orders counterfactuals by importance.
+
+    Features are scored by the number of leaves whose counterfactual uses
+    them. For ``distance == 1`` the counterfactuals of every feature are
+    merged across leaves (adjacent numerical intervals are joined) and listed
+    by decreasing score; for larger distances every leaf's counterfactual is
+    scored with the sum of its feature scores and listed by decreasing score.
+
+    Parameters
+    ----------
+    deterministic_order : bool
+        Remove duplicated categories keeping their order (instead of the
+        hash-dependent ``list(set(...))`` of the original implementation).
+
+    Returns
+    -------
+    dict
+        ``{rank: {feature: {'is': [...], 'wannabe': [...]}}}``.
+    """
+    frequency = {f: len(leaves) for f, leaves in per_feature.items()}
+    counterfactuals = {}
+    if distance == 1:
+        order = sorted([(frequency[f], f) for f in frequency],
+                       key=lambda x: x[0], reverse=True)
+        for counter, (_, feature) in enumerate(order):
+            current, wannabe = [], []
+            numerical = False
+            for leaf in per_feature[feature]:
+                current += per_leaf[leaf][feature]['is']
+                wannabe += per_leaf[leaf][feature]['wannabe']
+                if isinstance(per_leaf[leaf][feature]['wannabe'][0], list):
+                    numerical = True
+            current = _unique(current, deterministic_order)
+            if numerical:
+                merged = []
+                while wannabe:
+                    c = list(wannabe.pop())
+                    c, wannabe = grow_region(c, wannabe)
+                    merged.append(c)
+                wannabe = sorted(merged, key=lambda x: float(
+                    x[0] if x[0] is not None else 0))
+            else:
+                wannabe = _unique(wannabe, deterministic_order)
+            counterfactuals[counter] = {feature: {'is': current,
+                                                  'wannabe': wannabe}}
+        return counterfactuals
+
+    logger.debug('Feature frequencies: %s', frequency)
+    importance = [(sum(frequency[f] for f in per_leaf[leaf]), leaf)
+                  for leaf in per_leaf]
+    for counter, (_, leaf) in enumerate(
+            sorted(importance, key=lambda x: x[0], reverse=True)):
+        counterfactuals[counter] = per_leaf[leaf]
+    return counterfactuals
+
+
+def describe_range(interval):
+    """Describes an interval, e.g. ``'between 22.5 and 30.5'``."""
+    lower, upper = interval[0], interval[1]
+    if lower is None and upper is not None:
+        return 'less or equal to {}'.format(upper)
+    if lower is not None and upper is None:
+        return 'more than {}'.format(lower)
+    if lower is not None and upper is not None:
+        return 'between {} and {}'.format(lower, upper)
+    raise ValueError('Incorrectly formatted interval: {!r}.'.format(interval))
+
+
+def describe_counterfactuals(counterfactuals, spec):
+    """
+    Translates counterfactuals into human-readable values.
+
+    Feature ids are replaced by ``Feature.display_name``, categories by
+    ``Feature.value_names`` and intervals by :func:`describe_range`.
+
+    Parameters
+    ----------
+    counterfactuals : dict
+        ``{key: {feature: {'is': ..., 'wannabe': ...}}}`` (e.g. the output of
+        :func:`rank_counterfactuals`).
+    spec : ctreex.features.FeatureSpec
+    """
+    translation = {}
+    for key, features in counterfactuals.items():
+        translation[key] = {}
+        for feature_id, cf in features.items():
+            feature = spec.features[feature_id]
+            if feature.kind == NUMERICAL:
+                entry = {'is': list(cf['is']),
+                         'wannabe': [describe_range(i) for i in cf['wannabe']]}
+            else:
+                entry = {'is': [feature.describe_value(i) for i in cf['is']],
+                         'wannabe': [feature.describe_value(i)
+                                     for i in cf['wannabe']]}
+            translation[key][feature.display_name] = entry
+    return translation
