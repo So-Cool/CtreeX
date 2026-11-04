@@ -34,8 +34,11 @@ def test_continue_past_missing_distance():
     case = load_case('distance_gap_case.json')
     x = np.array(case['x'])
     legacy = TreeCounterfactualExplainer(case['tree'],
-                                           implementation='legacy')
-    fixed = TreeCounterfactualExplainer(case['tree'], implementation='fixed')
+                                         implementation='legacy')
+    # the gap is caused by the incomplete categorical meta-features of the
+    # legacy implementation; with all the other fixes it does not occur
+    fixed = TreeCounterfactualExplainer(
+        case['tree'], fixes={'complete_categorical_features': False})
     e_legacy = legacy.explain_instance(x)
     e_fixed = fixed.explain_instance(x)
     assert sorted(e_legacy.support) == [0, 1, 3]  # no leaf at distance 2
@@ -203,3 +206,64 @@ def test_restriction_fix_switch():
                     found_incomplete |= len(changes) < found.distance
                     found_truncated |= not changes
     assert found_incomplete and found_truncated
+
+
+def _apply(spec, values, changes):
+    """Changes a data point as a (single-leaf) counterfactual says."""
+    new = dict(values)
+    for feature, change in changes.items():
+        wannabe = change['wannabe'][0]
+        if spec.kind(feature) == 'numerical':
+            lower, upper = wannabe
+            new[feature] = (float(upper) if upper is not None
+                            else float(lower) + 1)
+        else:
+            new[feature] = wannabe
+    return spec.encode(new)
+
+
+def _category_gap_tree():
+    # age <= 40 -> (job_b <= 0.5 -> leaf 2 'no', else leaf 3 'yes');
+    # age > 40  -> (job_a <= 0.5 -> leaf 5 'yes', else leaf 6 'no');
+    # the tree never splits on job_c
+    return TreeStructure(
+        children_left=[1, 2, -1, -1, 5, -1, -1],
+        children_right=[4, 3, -1, -1, 6, -1, -1],
+        feature=[0, 2, -2, -2, 1, -2, -2],
+        threshold=[40., 0.5, -2, -2, 0.5, -2, -2],
+        value=[[4, 4], [2, 2], [2, 0], [0, 2], [2, 2], [0, 2], [2, 0]],
+        classes=['no', 'yes'], n_features=4,
+        feature_names=['age', 'job_a', 'job_b', 'job_c'])
+
+
+def test_complete_categorical_features():
+    tree = _category_gap_tree()
+    x = np.array([30., 0, 0, 1])  # age 30, job c -> leaf 2 ('no')
+    legacy = TreeCounterfactualExplainer(tree, implementation='legacy')
+    fixed = TreeCounterfactualExplainer(tree)
+    e_legacy, e_fixed = legacy.explain_instance(x), fixed.explain_instance(x)
+    assert e_legacy.leaf == e_fixed.leaf == 2
+    # the legacy description of leaf 2 requires job a (job c was invisible)
+    assert e_legacy.leaf_distances.tolist() == [1, 1, 2, 2]
+    assert e_fixed.leaf_distances.tolist() == [0, 1, 1, 2]
+    # "age more than 40" alone reaches leaf 5 ('yes'); the legacy version
+    # also asked for job b
+    assert e_fixed.at_distance(1).per_leaf[5] == {
+        'age': {'is': [30], 'wannabe': [['40.0', None]]}}
+    assert set(e_legacy.at_distance(2).per_leaf[5]) == {'age', 'job'}
+
+
+def test_counterfactuals_reach_their_leaves():
+    case = load_case('single_threshold_case.json')
+    explainer = TreeCounterfactualExplainer(case['tree'])
+    spec = explainer.spec
+    ids = explainer.leaf_meta_features.leaf_ids.tolist()
+    for x in np.array(case['X']):
+        e = explainer.explain_instance(x)
+        assert e.leaf_distances[ids.index(e.leaf)] == 0
+        values = spec.decode(x)
+        for found in e.counterfactuals:
+            for leaf, changes in found.per_leaf.items():
+                assert len(changes) == found.distance
+                new = _apply(spec, values, changes)
+                assert explainer.predict_leaf(new) == leaf

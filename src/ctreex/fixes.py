@@ -56,11 +56,23 @@ class Fixes(object):
         listing one feature) and empty ones. When ``True``, leaves whose
         counterfactual needs a forbidden feature are skipped, so every
         counterfactual at distance ``d`` changes exactly ``d`` features.
+    complete_categorical_features : bool
+        The original implementation creates meta-features only for the
+        categories (one-hot columns) the tree splits on and completes a leaf's
+        description with the rule "all but one category excluded -> the
+        remaining one is required". When the tree never splits on some
+        categories, the rule selects a category although the others are
+        allowed too, so data points can be at a non-zero distance from their
+        own leaf, counterfactuals get wrong distances (or are missed) and
+        some alternative categories are not listed. When ``True``,
+        meta-features are created for all the categories of every categorical
+        feature used by the tree. The leaf-to-leaf distances change as well.
     """
     deterministic_order: bool = True
     continue_past_missing_distance: bool = True
     complete_numerical_intervals: bool = True
     whole_counterfactual_restrictions: bool = True
+    complete_categorical_features: bool = True
 
     @classmethod
     def legacy(cls):

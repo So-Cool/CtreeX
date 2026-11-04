@@ -148,6 +148,17 @@ uv sync --group notebooks && uv run jupyter lab notebooks/
   feature, which does not change the prediction) and empty ones.
   With the fix every counterfactual at distance `d` changes exactly `d`
   features.
+* **New fix: pay attention of all values of categorical features.**
+  `complete_categorical_features` (enabled by `implementation='fixed'`):
+  meta-features are created for *all* the categories of every categorical
+  feature used by the tree, not only for the categories the tree splits on.
+  The legacy implementation completed a leaf's description with the rule
+  "all but one category excluded, hence the remaining one is required",
+  which is wrong when the tree never splits on some categories: data points
+  could be at a non-zero distance from their own leaf, counterfactuals got
+  wrong distances or were missed, and some alternative categories were not
+  listed. This was also the only cause of distances without leaves observed in
+  practice, hence `continue_past_missing_distance` is now merely a safety net.
 * **Documentation.**
   How leaves describe numerical features is documented more accurately:
   an interval is `1` when it lies inside the region the leaf's path allows
@@ -201,6 +212,7 @@ which was based on pandas and seaborn.
 | `deterministic_order` | alternative categories de-duplicated with `list(set(...))`, so their order changed between program runs (string hashing is randomised) | order of discovery |
 | `continue_past_missing_distance` | the search stopped at the first distance at which no leaf exists, e.g. with leaves at distances 1 and 3 only the distance-3 counterfactuals were never found | missing distances are skipped |
 | `complete_numerical_intervals` (0.0.2) | a numerical feature split at a single threshold `t` had only the `A<=t` meta-feature | both `A<=t` and `t<A` |
+| `complete_categorical_features` (0.0.2) | meta-features only for the categories the tree splits on; leaves could require a category although others were allowed | meta-features for all the categories of the features used by the tree |
 | `whole_counterfactual_restrictions` (0.0.2) | `excluded`/`included` features were removed from every counterfactual, leaving incomplete and empty counterfactuals | leaves whose counterfactual needs a forbidden feature are skipped |
 
 Select individual fixes with `fixes={'deterministic_order': False}` or a

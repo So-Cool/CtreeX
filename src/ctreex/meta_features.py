@@ -12,7 +12,8 @@ Every leaf is then described by a vector over the meta-features:
 
 * a one-hot column is ``1`` when the leaf's path requires the category,
   ``-1`` when the path excludes it and ``0`` when the path allows it among
-  other categories (or does not test the feature);
+  other categories (or does not test the feature); a path that excludes all
+  but one category requires the remaining one;
 * the path of a leaf confines a numerical feature to a region
   ``(lower, upper]`` (``lower``/``upper`` are the tightest bounds on the path,
   possibly infinite); an interval is ``1`` when it lies inside this region and
@@ -31,6 +32,11 @@ In the original code a numerical feature split at a single threshold ``t`` is
 represented only by the ``A<=t`` interval (no ``t<A`` meta-feature is
 created); the ``complete_numerical_intervals`` fix (see :mod:`ctreex.fixes`)
 adds the missing interval.
+Similarly, the original code created meta-features only for the categories
+(one-hot columns) the tree splits on, so the "all but one category excluded"
+rule could select a category although others -- never split on -- were
+allowed too; the ``complete_categorical_features`` fix creates meta-features
+for all the categories of every categorical feature used by the tree.
 """
 import dataclasses
 import itertools
@@ -202,7 +208,8 @@ def path_splits(paths):
     return splits
 
 
-def build_meta_features(splits, spec, complete_intervals=False):
+def build_meta_features(splits, spec, complete_intervals=False,
+                        complete_categories=False):
     """
     Creates the meta-features from the split values of every column.
 
@@ -218,11 +225,26 @@ def build_meta_features(splits, spec, complete_intervals=False):
         Create both intervals (``A<=t`` and ``t<A``) of a numerical feature
         split at a single threshold ``t``; the original implementation created
         only ``A<=t``.
+    complete_categories : bool
+        Create a meta-feature for *every* category of a categorical feature
+        used by the tree (in the order of the specification); the original
+        implementation created them only for the categories (one-hot columns)
+        the tree splits on.
     """
     meta_features = []
     for name, values in splits.items():
         column = spec.column_index(name)
         feature, category = spec.columns[column]
+        if category is not None and complete_categories:
+            if any(m.feature == feature for m in meta_features):
+                continue  # all the categories were added already
+            for value in spec.features[feature].values:
+                column_name = spec.column_names[spec.columns.index(
+                    (feature, value))]
+                meta_features.append(MetaFeature(
+                    column_name, feature, CATEGORICAL,
+                    spec.column_index(column_name), category=value))
+            continue
         if category is not None:
             meta_features.append(MetaFeature(name, feature, CATEGORICAL,
                                              column, category=category))

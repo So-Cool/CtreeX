@@ -164,7 +164,8 @@ class TreeCounterfactualExplainer(object):
         self.splits = mf.path_splits(self.paths)
         self.meta_features = mf.build_meta_features(
             self.splits, self.spec,
-            complete_intervals=self.fixes.complete_numerical_intervals)
+            complete_intervals=self.fixes.complete_numerical_intervals,
+            complete_categories=self.fixes.complete_categorical_features)
         self.leaf_meta_features = mf.leaf_meta_features(self.paths,
                                                         self.meta_features)
         self._leaf_distance_matrix = None

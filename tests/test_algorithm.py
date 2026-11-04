@@ -10,6 +10,13 @@ from ctreex.distances import categorical_distance, exact_distance
 
 @pytest.fixture
 def explainer(toy_tree, toy_spec):
+    # the legacy implementation: meta-features only for the split categories
+    return TreeCounterfactualExplainer(toy_tree, toy_spec,
+                                       implementation='legacy')
+
+
+@pytest.fixture
+def fixed_explainer(toy_tree, toy_spec):
     return TreeCounterfactualExplainer(toy_tree, toy_spec)
 
 
@@ -43,6 +50,25 @@ def test_explanation(explainer, toy_spec):
     assert explainer.describe(found.ranked) == {
         0: {'job type': {'is': ['baker'], 'wannabe': ['artist']}},
         1: {'age': {'is': [25], 'wannabe': ['between 30.0 and 50.0']}}}
+
+
+def test_fixed_meta_features(fixed_explainer, toy_spec):
+    # every category of a categorical feature used by the tree is described
+    assert [m.name for m in fixed_explainer.meta_features] == [
+        'age<=30.0', '30.0<age<=50.0', '50.0<age', 'job_a', 'job_b', 'job_c']
+    assert fixed_explainer.leaf_meta_features.matrix.tolist() == [
+        [1, -1, -1, -1, 0, 0], [1, -1, -1, 1, -1, -1],
+        [-1, 1, -1, 0, 0, 0], [-1, -1, 1, 0, 0, 0]]
+    e = fixed_explainer.explain_instance(toy_spec.encode({'age': 25,
+                                                          'job': 'b'}))
+    assert e.meta_features.tolist() == [1, -1, -1, -1, 1, -1]
+    assert e.leaf_distances.tolist() == [0, 1, 1, 1]
+    assert e.at_distance(1).ranked == {
+        0: {'job': {'is': ['b'], 'wannabe': ['a']}},
+        1: {'age': {'is': [25], 'wannabe': [['30.0', '50.0']]}}}
+    matrix, _, _ = fixed_explainer.leaf_distance_matrix()
+    assert matrix[0, 1] == 1
+    assert matrix[0, 2] == pytest.approx(2 / 6)  # 6 meta-features now
 
 
 def test_excluded_and_included(explainer, toy_spec):
