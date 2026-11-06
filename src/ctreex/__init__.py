@@ -8,6 +8,8 @@ It depends only on numpy.
 
 >>> from ctreex import TreeCounterfactualExplainer
 """
+from importlib.metadata import PackageNotFoundError, version
+
 from ctreex.explainer import (CounterfactualExplanation,
                               DistanceCounterfactuals,
                               TreeCounterfactualExplainer)
@@ -15,8 +17,11 @@ from ctreex.features import Feature, FeatureSpec
 from ctreex.fixes import Fixes
 from ctreex.tree import TreeStructure, load_tree
 
-__version__ = '0.0.3'
-
 __all__ = ['TreeCounterfactualExplainer', 'CounterfactualExplanation',
            'DistanceCounterfactuals', 'Feature', 'FeatureSpec', 'Fixes',
            'TreeStructure', 'load_tree']
+
+try:
+    __version__ = version('ctreex')  # the version in pyproject.toml
+except PackageNotFoundError:         # pragma: no cover (not installed)
+    __version__ = 'unknown'

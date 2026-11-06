@@ -187,3 +187,35 @@ def test_short_thresholds_switch():
         assert explainer.describe(ranked)[0]['x']['wannabe'] == [expected]
     assert clf.apply(np.array([[0.85]], dtype=np.float32))[0] == \
         clf.apply(np.array([[1.2]], dtype=np.float32))[0]
+
+
+def test_class_equivalent(explainer, toy_spec):
+    x = toy_spec.encode({'age': 25, 'job': 'b'})  # leaf 2 ('no')
+    e = explainer.explain_instance(x, counterfactual=False)
+    assert e.prediction == 'no' and not e.counterfactual
+    # leaf 6 ('no') is reached by changing the age only
+    assert e.distances == [1]
+    found = e.at_distance(1)
+    assert found.per_leaf == {6: {'age': {'is': [25],
+                                          'wannabe': [['50.0', None]]}}}
+    assert found.leaf_classes == {6: 'no'}
+    assert explainer.describe(found.ranked) == {
+        0: {'age': {'is': [25], 'wannabe': ['more than 50.0']}}}
+    # the default stays class-contrastive
+    assert explainer.explain_instance(x).counterfactual
+    with pytest.raises(ValueError):
+        explainer.explain_instance(x, counterfactual=False,
+                                   target_class='yes')
+
+
+def test_class_equivalent_keeps_the_prediction(fixed_explainer, toy_spec):
+    for age in (20, 35, 60):
+        for job in 'abc':
+            values = {'age': age, 'job': job}
+            x = toy_spec.encode(values)
+            e = fixed_explainer.explain_instance(x, counterfactual=False)
+            for found in e.counterfactuals:
+                # (empty at distances with leaves of the other class only)
+                assert set(found.leaf_classes.values()) <= {e.prediction}
+                for leaf in found.per_leaf:
+                    assert leaf != e.leaf

@@ -91,6 +91,9 @@ class CounterfactualExplanation(object):
         ``{distance: {'same': [...], 'other': [...]}}`` leaf groups.
     counterfactuals : list of DistanceCounterfactuals
         Counterfactuals ordered by increasing distance.
+    counterfactual : bool
+        Whether the counterfactuals are class-contrastive (``True``) or
+        class-equivalent (``False``).
     """
     leaf: int
     prediction: object
@@ -99,6 +102,7 @@ class CounterfactualExplanation(object):
     leaf_distances: np.ndarray
     support: dict
     counterfactuals: list
+    counterfactual: bool = True
 
     @property
     def distances(self):
@@ -230,9 +234,15 @@ class TreeCounterfactualExplainer(object):
         return self._leaf_distance_matrix, lmf.leaf_ids, lmf.leaf_classes
 
     def explain_instance(self, x, instance_values=None, max_distance=None,
-                         excluded=(), included=(), target_class=None):
+                         excluded=(), included=(), target_class=None,
+                         counterfactual=True):
         """
         Computes the counterfactuals of a data point.
+
+        By default these are *class-contrastive* counterfactuals -- changes
+        that lead to a different prediction. With ``counterfactual=False``
+        they are *class-equivalent* -- changes that move the data point to
+        another leaf of the same class, i.e., that keep the prediction.
 
         Parameters
         ----------
@@ -251,6 +261,9 @@ class TreeCounterfactualExplainer(object):
         target_class : object, optional
             Explain only how to reach this class (multi-class trees); by
             default counterfactuals lead to any other class.
+        counterfactual : bool
+            Class-contrastive (``True``, default) or class-equivalent
+            (``False``) explanations.
 
         Returns
         -------
@@ -274,6 +287,9 @@ class TreeCounterfactualExplainer(object):
 
         if max_distance is None:
             max_distance = self.spec.n_features
+        if target_class is not None and not counterfactual:
+            raise ValueError('A target class can only be given for '
+                             'class-contrastive counterfactuals.')
         if target_class is not None:
             if target_class not in set(lmf.leaf_classes.tolist()):
                 raise ValueError('Unknown target class: {!r}.'.format(
@@ -288,7 +304,7 @@ class TreeCounterfactualExplainer(object):
                     lmf, instance, instance_values, support, self.spec,
                     distance=distance, excluded=excluded, included=included,
                     whole_restrictions=self.fixes.whole_counterfactual_restrictions,
-                    target_class=target_class)
+                    target_class=target_class, counterfactual=counterfactual)
             except cfs.MissingDistance:
                 if self.fixes.continue_past_missing_distance:
                     continue
@@ -311,7 +327,8 @@ class TreeCounterfactualExplainer(object):
         return CounterfactualExplanation(
             leaf=leaf, prediction=prediction, instance_values=instance_values,
             meta_features=instance, leaf_distances=leaf_distances,
-            support=support, counterfactuals=found)
+            support=support, counterfactuals=found,
+            counterfactual=counterfactual)
 
     def describe(self, counterfactuals, integer_ranges=False):
         """
