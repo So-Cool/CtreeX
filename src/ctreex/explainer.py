@@ -12,8 +12,9 @@ The algorithm:
 2. the data point is described with the same meta-features and its exact
    distance to every leaf -- i.e., the number of features that would need to
    change to reach the leaf -- is computed (:mod:`ctreex.distances`);
-3. the conditions of leaves of the opposite class at distance 1, 2, ... are
-   turned into counterfactuals and ranked (:mod:`ctreex.counterfactuals`).
+3. the conditions of the *target* leaves (:mod:`ctreex.targets`) -- by
+   default, leaves of another class -- at distance 1, 2, ... are turned into
+   counterfactuals and ranked (:mod:`ctreex.counterfactuals`).
 """
 import dataclasses
 import logging
@@ -25,6 +26,7 @@ from ctreex import counterfactuals as cfs
 from ctreex import distances
 from ctreex import meta_features as mf
 from ctreex import _validation as val
+from ctreex import targets as tgt
 from ctreex.features import FeatureSpec
 from ctreex.tree import load_tree
 
@@ -86,12 +88,14 @@ class CounterfactualExplanation(object):
     leaf_distances : numpy.ndarray
         Exact distances to all the leaves (in ``LeafMetaFeatures`` order).
     support : dict
-        ``{distance: {'same': [...], 'other': [...]}}`` leaf groups.
+        ``{distance: {'target': [...], 'non_target': [...]}}`` leaf groups
+        (see :func:`ctreex.counterfactuals.support_set`).
     counterfactuals : list of DistanceCounterfactuals
         Counterfactuals ordered by increasing distance.
-    counterfactual : bool
-        Whether the counterfactuals are class-contrastive (``True``) or
-        class-equivalent (``False``).
+    target : ctreex.targets.Target
+        The target the counterfactuals lead to, e.g.,
+        ``OtherClass()`` (class-contrastive) or ``SameClass()``
+        (class-equivalent).
     """
     leaf: int
     prediction: object
@@ -100,7 +104,7 @@ class CounterfactualExplanation(object):
     leaf_distances: np.ndarray
     support: dict
     counterfactuals: list
-    counterfactual: bool = True
+    target: tgt.Target = dataclasses.field(default_factory=tgt.OtherClass)
 
     @property
     def distances(self):
@@ -193,6 +197,12 @@ class TreeCounterfactualExplainer(object):
         self.leaf_meta_features = mf.leaf_meta_features(self.paths,
                                                         self.meta_features)
         self._leaf_distance_matrix = None
+        value = np.asarray(self.tree.value, dtype=np.float64)[
+            self.leaf_meta_features.leaf_ids]
+        self._leaf_probabilities = value / value.sum(axis=1, keepdims=True)
+        self._class_labels = [
+            class_names[c] if class_names is not None else c
+            for c in self.tree.classes.tolist()]
 
     @property
     def classes(self):
@@ -219,16 +229,39 @@ class TreeCounterfactualExplainer(object):
         lmf = self.leaf_meta_features
         return self._leaf_distance_matrix, lmf.leaf_ids, lmf.leaf_classes
 
+    def target_context(self, leaf):
+        """
+        The context in which targets select leaves for a data point.
+
+        Parameters
+        ----------
+        leaf : int
+            The leaf of the data point (see :meth:`predict_leaf`).
+
+        Returns
+        -------
+        ctreex.targets.TargetContext
+        """
+        lmf = self.leaf_meta_features
+        return tgt.TargetContext(
+            prediction=lmf.leaf_classes[lmf.leaf_index(leaf)], leaf=leaf,
+            leaf_ids=lmf.leaf_ids, leaf_classes=lmf.leaf_classes,
+            leaf_probabilities=self._leaf_probabilities,
+            classes=list(self._class_labels))
+
     def explain_instance(self, x, instance_values=None, max_distance=None,
-                         excluded=(), included=(), target_class=None,
-                         counterfactual=True):
+                         excluded=(), included=(), target=None):
         """
         Computes the counterfactuals of a data point.
 
-        By default these are *class-contrastive* counterfactuals -- changes
-        that lead to a different prediction. With ``counterfactual=False``
-        they are *class-equivalent* -- changes that move the data point to
-        another leaf of the same class, i.e., that keep the prediction.
+        The counterfactuals are the changes that move the data point to the
+        closest *target* leaves (see :mod:`ctreex.targets`).
+        By default (``OtherClass()``) these are *class-contrastive*
+        counterfactuals -- changes that lead to a different prediction;
+        ``TargetClass(label)`` leads to one class (multi-class trees);
+        ``SameClass()`` yields *class-equivalent* explanations -- changes
+        that move the data point to another leaf of the same class, i.e.,
+        that keep the prediction.
 
         Parameters
         ----------
@@ -248,12 +281,9 @@ class TreeCounterfactualExplainer(object):
             The names have to be features of the specification
             (``FeatureSpec.features``);
             features the tree does not use have no effect.
-        target_class : object, optional
-            Explain only how to reach this class (multi-class trees); by
-            default counterfactuals lead to any other class.
-        counterfactual : bool
-            Class-contrastive (``True``, default) or class-equivalent
-            (``False``) explanations.
+        target : ctreex.targets.Target, optional
+            Selects the leaves the counterfactuals lead to
+            (default: ``OtherClass()``).
 
         Returns
         -------
@@ -268,34 +298,26 @@ class TreeCounterfactualExplainer(object):
                              '(predict_leaf).')
         if instance_values is None:
             instance_values = self.spec.decode(x)
+        if target is None:
+            target = tgt.OtherClass()
         lmf = self.leaf_meta_features
         leaf = self.predict_leaf(x)
-        prediction = lmf.leaf_classes[lmf.leaf_index(leaf)]
+        context = self.target_context(leaf)
+        prediction = context.prediction
+        targets = tgt.select_targets(target, context)
 
         instance = mf.instance_meta_features(x, self.meta_features)
         leaf_distances = distances.instance_leaf_distances(lmf, instance)
-        support = cfs.support_set(prediction, leaf_distances, lmf.leaf_ids,
-                                  lmf.leaf_classes)
+        support = cfs.support_set(leaf_distances, lmf.leaf_ids, targets)
 
         if max_distance is None:
             max_distance = self.spec.n_features
-        if target_class is not None and not counterfactual:
-            raise ValueError('A target class can only be given for '
-                             'class-contrastive counterfactuals.')
-        if target_class is not None:
-            if target_class not in set(lmf.leaf_classes.tolist()):
-                raise ValueError('Unknown target class: {!r}.'.format(
-                    target_class))
-            if target_class == prediction:
-                raise ValueError('The target class has to differ from the '
-                                 'prediction ({!r}).'.format(prediction))
         found = []
         for distance in range(1, max_distance + 1):
             try:
                 per_leaf, per_feature = cfs.extract_counterfactuals(
                     lmf, instance, instance_values, support,
-                    distance=distance, excluded=excluded, included=included,
-                    target_class=target_class, counterfactual=counterfactual)
+                    distance=distance, excluded=excluded, included=included)
             except cfs.MissingDistance:  # no leaf this far from the point
                 continue
             leaf_classes = {leaf: _python(lmf.leaf_classes[lmf.leaf_index(
@@ -313,8 +335,7 @@ class TreeCounterfactualExplainer(object):
         return CounterfactualExplanation(
             leaf=leaf, prediction=prediction, instance_values=instance_values,
             meta_features=instance, leaf_distances=leaf_distances,
-            support=support, counterfactuals=found,
-            counterfactual=counterfactual)
+            support=support, counterfactuals=found, target=target)
 
     def describe(self, counterfactuals, integer_ranges=False):
         """

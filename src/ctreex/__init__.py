@@ -14,10 +14,12 @@ from ctreex.explainer import (CounterfactualExplanation,
                               DistanceCounterfactuals,
                               TreeCounterfactualExplainer)
 from ctreex.features import Feature, FeatureSpec
+from ctreex.targets import OtherClass, SameClass, Target, TargetClass
 from ctreex.tree import TreeStructure, load_tree
 
 __all__ = ['TreeCounterfactualExplainer', 'CounterfactualExplanation',
            'DistanceCounterfactuals', 'Feature', 'FeatureSpec',
+           'Target', 'OtherClass', 'TargetClass', 'SameClass',
            'TreeStructure', 'load_tree']
 
 try:

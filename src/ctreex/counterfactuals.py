@@ -2,10 +2,11 @@
 Extraction, ranking and description of counterfactuals.
 
 A counterfactual of a data point is a set of feature changes that move the
-data point into a leaf of a different class.
+data point into a *target* leaf (see :mod:`ctreex.targets`), e.g., a leaf of
+a different class.
 Leaves are grouped by their (exact) distance to the data point -- i.e.,
 the number of features that need to change -- and the conditions of every
-opposite-class leaf at a given distance are turned into counterfactuals.
+target leaf at a given distance are turned into counterfactuals.
 
 Numpy reimplementation of the original ``get_leaf_support_set_instance``,
 ``get_leaf_support_set_metric``, ``volatility_index``, ``grow_region``,
@@ -50,18 +51,31 @@ def _unique(values):
     return list(dict.fromkeys(values))
 
 
-def support_set(instance_class, distances, leaf_ids, leaf_classes):
+def support_set(distances, leaf_ids, targets):
     """
     Groups the leaves by their distance to a data point.
+
+    Parameters
+    ----------
+    distances : numpy.ndarray
+        Exact distances between the data point and the leaves.
+    leaf_ids : numpy.ndarray
+        The leaf ids (following ``distances``).
+    targets : numpy.ndarray
+        Boolean mask of the target leaves
+        (see :func:`ctreex.targets.select_targets`).
 
     Returns
     -------
     dict
-        ``{distance: {'same': [leaf ids], 'other': [leaf ids]}}`` where
-        ``same`` (``other``) lists leaves of the same (a different) class;
+        ``{distance: {'target': [leaf ids], 'non_target': [leaf ids]}}``
+        where ``target`` (``non_target``) lists the (other) leaves selected by
+        the target;
         distances are in the order of their first appearance.
     """
     distances = np.asarray(distances)
+    leaf_ids = np.asarray(leaf_ids)
+    targets = np.asarray(targets, dtype=bool)
     out = {}
     for d in distances.tolist():
         if int(d) != d:
@@ -70,11 +84,8 @@ def support_set(instance_class, distances, leaf_ids, leaf_classes):
         if d in out:
             continue
         selected = distances == d
-        out[d] = {
-            'same': leaf_ids[selected & (leaf_classes == instance_class)]
-            .tolist(),
-            'other': leaf_ids[selected & (leaf_classes != instance_class)]
-            .tolist()}
+        out[d] = {'target': leaf_ids[selected & targets].tolist(),
+                  'non_target': leaf_ids[selected & ~targets].tolist()}
     return out
 
 
@@ -190,10 +201,12 @@ def grow_region(interval, intervals):
 
 
 def extract_counterfactuals(lmf, instance, instance_values, support,
-                            distance=1, excluded=(), included=(), exact=True,
-                            counterfactual=True, target_class=None):
+                            distance=1, excluded=(), included=(), exact=True):
     """
     Extracts the counterfactuals of a data point at a given distance.
+
+    The counterfactuals lead to the target leaves of ``support`` at that
+    distance.
 
     Parameters
     ----------
@@ -212,13 +225,8 @@ def extract_counterfactuals(lmf, instance, instance_values, support,
         A leaf is used only if *all* the features that have to change to
         reach it are allowed, so every counterfactual at distance ``d``
         changes exactly ``d`` features.
-    target_class : object, optional
-        Use only the leaves of this class (counterfactuals towards a specific
-        class of a multi-class tree).
     exact : bool
         Distance flavour used to find the features that differ.
-    counterfactual : bool
-        Use leaves of another class (``True``) or of the same class.
 
     Returns
     -------
@@ -232,13 +240,9 @@ def extract_counterfactuals(lmf, instance, instance_values, support,
     """
     if not included:
         included = [m.feature for m in lmf.meta_features]
-    side = 'other' if counterfactual else 'same'
     if distance not in support:
         raise MissingDistance(distance)
-    leaves = support[distance][side]
-    if target_class is not None:
-        leaves = [leaf for leaf in leaves
-                  if lmf.leaf_classes[lmf.leaf_index(leaf)] == target_class]
+    leaves = support[distance]['target']
 
     per_leaf, per_feature = {}, {}
     for leaf in leaves:

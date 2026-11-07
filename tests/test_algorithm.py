@@ -2,7 +2,8 @@
 import numpy as np
 import pytest
 
-from ctreex import TreeCounterfactualExplainer, TreeStructure
+from ctreex import (OtherClass, SameClass, TargetClass,
+                    TreeCounterfactualExplainer, TreeStructure)
 from ctreex.counterfactuals import (describe_range, grow_region,
                                     support_set_metric, volatility_index)
 from ctreex.distances import allowed, exact_distance, incompatible
@@ -48,8 +49,9 @@ def test_explanation(explainer, toy_spec):
     assert (e.leaf, e.prediction) == (2, 'no')
     assert e.meta_features.tolist() == [1, -1, -1, -1, 1, -1]
     assert e.leaf_distances.tolist() == [0, 1, 1, 1]
-    assert e.support == {0: {'same': [2], 'other': []},
-                         1: {'same': [6], 'other': [3, 5]}}
+    assert e.target == OtherClass()
+    assert e.support == {0: {'target': [], 'non_target': [2]},
+                         1: {'target': [3, 5], 'non_target': [6]}}
     found = e.at_distance(1)
     assert found.per_feature == {'job': [3], 'age': [5]}
     assert found.ranked == {
@@ -267,8 +269,10 @@ def test_short_thresholds_in_descriptions():
 
 def test_class_equivalent(explainer, toy_spec):
     x = toy_spec.encode({'age': 25, 'job': 'b'})  # leaf 2 ('no')
-    e = explainer.explain_instance(x, counterfactual=False)
-    assert e.prediction == 'no' and not e.counterfactual
+    e = explainer.explain_instance(x, target=SameClass())
+    assert e.prediction == 'no' and e.target == SameClass()
+    assert e.support == {0: {'target': [2], 'non_target': []},
+                         1: {'target': [6], 'non_target': [3, 5]}}
     # leaf 6 ('no') is reached by changing the age only
     assert e.distances == [1]
     found = e.at_distance(1)
@@ -278,10 +282,9 @@ def test_class_equivalent(explainer, toy_spec):
     assert explainer.describe(found.ranked) == {
         0: {'age': {'is': [25], 'wannabe': ['more than 50.0']}}}
     # the default stays class-contrastive
-    assert explainer.explain_instance(x).counterfactual
-    with pytest.raises(ValueError):
-        explainer.explain_instance(x, counterfactual=False,
-                                   target_class='yes')
+    assert explainer.explain_instance(x).target == OtherClass()
+    with pytest.raises(ValueError):  # use SameClass() instead
+        explainer.explain_instance(x, target=TargetClass('no'))
 
 
 def test_class_equivalent_keeps_the_prediction(explainer, toy_spec):
@@ -289,7 +292,7 @@ def test_class_equivalent_keeps_the_prediction(explainer, toy_spec):
         for job in 'abc':
             values = {'age': age, 'job': job}
             x = toy_spec.encode(values)
-            e = explainer.explain_instance(x, counterfactual=False)
+            e = explainer.explain_instance(x, target=SameClass())
             for found in e.counterfactuals:
                 # (empty at distances with leaves of the other class only)
                 assert set(found.leaf_classes.values()) <= {e.prediction}

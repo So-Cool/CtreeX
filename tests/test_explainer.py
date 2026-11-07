@@ -1,7 +1,8 @@
 import numpy as np
 import pytest
 
-from ctreex import TreeCounterfactualExplainer, TreeStructure
+from ctreex import (OtherClass, SameClass, Target, TargetClass,
+                    TreeCounterfactualExplainer, TreeStructure)
 from ctreex.counterfactuals import rank_counterfactuals
 from conftest import load_case
 
@@ -225,15 +226,90 @@ def test_multi_class(three_classes):
 def test_target_class(three_classes):
     explainer = TreeCounterfactualExplainer(three_classes, ['x'])
     x = np.array([5.])
-    e = explainer.explain_instance(x, target_class='high')
+    e = explainer.explain_instance(x, target=TargetClass('high'))
     assert [(d, classes) for d, classes, _ in e.ranked(with_classes=True)] \
         == [(1, ['high'])]
     assert explainer.describe(e.counterfactuals[0].ranked)[0]['x'][
         'wannabe'] == ['more than 19.5']
+    with pytest.raises(ValueError):  # the prediction
+        explainer.explain_instance(x, target=TargetClass('low'))
     with pytest.raises(ValueError):
-        explainer.explain_instance(x, target_class='low')  # the prediction
+        explainer.explain_instance(x, target=TargetClass('very high'))
+
+
+def test_target_class_names(three_classes):
+    explainer = TreeCounterfactualExplainer(
+        three_classes, ['x'],
+        class_names={'low': 'L', 'mid': 'M', 'high': 'H'})
+    e = explainer.explain_instance(np.array([5.]), target=TargetClass('H'))
+    assert e.prediction == 'L'
+    assert [classes for _, classes, _ in e.ranked(with_classes=True)] == \
+        [['H']]
+    with pytest.raises(ValueError):  # targets use the class names
+        explainer.explain_instance(np.array([5.]),
+                                   target=TargetClass('high'))
+
+
+def test_target_context(three_classes):
+    explainer = TreeCounterfactualExplainer(three_classes, ['x'])
+    leaf = explainer.predict_leaf(np.array([5.]))
+    context = explainer.target_context(leaf)
+    assert context.prediction == 'low' and context.leaf == leaf
+    assert sorted(context.classes) == ['high', 'low', 'mid']
+    assert context.leaf_probabilities.shape == (
+        context.leaf_ids.shape[0], 3)
+    assert np.allclose(context.leaf_probabilities.sum(axis=1), 1)
+    # the columns follow context.classes
+    majority = [context.classes[i]
+                for i in context.leaf_probabilities.argmax(axis=1)]
+    assert majority == context.leaf_classes.tolist()
+    assert OtherClass().select(context).tolist() == [
+        c != 'low' for c in context.leaf_classes]
+    assert SameClass().select(context).tolist() == [
+        c == 'low' for c in context.leaf_classes]
+
+
+class _NotLow(Target):
+    """Leaves whose proportion of 'low' is at most a threshold."""
+
+    def __init__(self, at_most):
+        self.at_most = at_most
+
+    def validate(self, context):
+        if not 0 <= self.at_most <= 1:
+            raise ValueError('at_most has to be a proportion.')
+
+    def select(self, context):
+        low = context.classes.index('low')
+        return context.leaf_probabilities[:, low] <= self.at_most
+
+
+def test_custom_target(three_classes):
+    explainer = TreeCounterfactualExplainer(three_classes, ['x'])
+    x = np.array([5.])
+    custom = explainer.explain_instance(x, target=_NotLow(0))
+    default = explainer.explain_instance(x)
+    assert isinstance(custom.target, _NotLow)
+    assert custom.ranked(with_classes=True) == \
+        default.ranked(with_classes=True)
     with pytest.raises(ValueError):
-        explainer.explain_instance(x, target_class='very high')
+        explainer.explain_instance(x, target=_NotLow(2))
+
+
+class _Broken(Target):
+    def select(self, context):
+        return [1] * len(context.leaf_ids)
+
+
+def test_invalid_targets(three_classes):
+    explainer = TreeCounterfactualExplainer(three_classes, ['x'])
+    x = np.array([5.])
+    with pytest.raises(TypeError):
+        explainer.explain_instance(x, target='high')
+    with pytest.raises(NotImplementedError):
+        explainer.explain_instance(x, target=Target())
+    with pytest.raises(ValueError):  # not a boolean mask
+        explainer.explain_instance(x, target=_Broken())
 
 
 def test_ranked_counterfactuals_lead_to_one_class():

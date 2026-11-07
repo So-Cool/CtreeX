@@ -59,6 +59,34 @@
   unknown names (e.g., typos or display names) raise `ValueError` and a
   single string raises `TypeError` (previously unknown names were silently
   ignored and a string was matched as a substring).
+* **Targets.**
+  The leaves the counterfactuals lead to are selected by a *target*
+  (`ctreex.targets`), given with `explain_instance(..., target=...)`:
+  `OtherClass()` (the default, class-contrastive counterfactuals),
+  `TargetClass(label)` (one class of a multi-class tree) and
+  `SameClass()` (class-equivalent explanations).
+  They replace the `target_class` and `counterfactual` arguments of
+  `explain_instance`:
+  `target_class='a'` is now `target=TargetClass('a')` and
+  `counterfactual=False` is `target=SameClass()`.
+  `CounterfactualExplanation.target` records the target
+  (instead of the `counterfactual` flag).
+* **Custom targets.**
+  Subclasses of `ctreex.Target` implement `select(context)`, which returns a
+  boolean mask over the leaves, and optionally `validate(context)`;
+  the `ctreex.targets.TargetContext` holds the prediction, the leaf of the
+  data point, the leaves with their classes and class proportions, and the
+  classes.
+  `TreeCounterfactualExplainer.target_context(leaf)` builds it.
+* **Support sets of data points are split by the target.**
+  `CounterfactualExplanation.support` (`ctreex.counterfactuals.support_set`)
+  maps every distance to `{'target': [...], 'non_target': [...]}` instead of
+  `{'same': [...], 'other': [...]}`;
+  `support_set(distances, leaf_ids, targets)` takes the boolean mask of the
+  target leaves, and `extract_counterfactuals` uses its `target` leaves
+  (without the `counterfactual` and `target_class` arguments).
+  The support sets of leaves (`support_set_metric`) keep `same` and `other`,
+  which refer to the class of the reference leaf.
 
 ## 0.0.4
 

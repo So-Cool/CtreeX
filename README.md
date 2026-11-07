@@ -89,15 +89,23 @@ unknown names raise an error.
 A leaf is used only if all the features that have to change to reach it are
 allowed, so every counterfactual at distance *d* changes exactly *d* features.
 
-For multi-class trees, `target_class='...'` restricts the counterfactuals to
-one class, and `explanation.ranked(with_classes=True)` reports the class each
-counterfactual leads to.
+The `target` of `explain_instance` selects the leaves the counterfactuals
+lead to (`ctreex.targets`):
 
-With `counterfactual=False`, `explain_instance` returns *class-equivalent*
-explanations instead:
-the changes that keep the prediction (they lead to other leaves of the same
-class), e.g., to show how much a feature can change without affecting
-the decision.
+* `OtherClass()` (default) -- leaves of any other class, i.e.,
+  *class-contrastive* counterfactuals;
+* `TargetClass('...')` -- leaves of one class (multi-class trees), with
+  `explanation.ranked(with_classes=True)` reporting the class each
+  counterfactual leads to; and
+* `SameClass()` -- other leaves of the predicted class, i.e.,
+  *class-equivalent* explanations that describe the changes that keep the
+  prediction, e.g., to show how much a feature can change without affecting
+  the decision.
+
+Custom targets subclass `ctreex.Target` and implement `select(context)`,
+which returns a boolean mask over the leaves given the prediction and the
+classes and class proportions of all the leaves
+(`ctreex.targets.TargetContext`).
 
 The leaf-to-leaf distance matrix (`explainer.leaf_distance_matrix()`), its
 heat map and histograms (`ctreex.plot`) and the *volatility index* of a leaf
@@ -115,8 +123,9 @@ large values indicate leaves close to other classes.
 
 | Object | Purpose |
 |---|---|
-| `TreeCounterfactualExplainer(model, feature_spec, class_names)` | the explainer; `explain_instance(x, instance_values, max_distance, excluded, included, target_class, counterfactual)` returns a `CounterfactualExplanation` |
-| `CounterfactualExplanation` | `prediction`, `leaf`, `leaf_distances`, `support` (leaves per distance), `counterfactuals` (one `DistanceCounterfactuals` per distance), `ranked()`, `at_distance(d)` |
+| `TreeCounterfactualExplainer(model, feature_spec, class_names)` | the explainer; `explain_instance(x, instance_values, max_distance, excluded, included, target)` returns a `CounterfactualExplanation` |
+| `OtherClass`, `TargetClass`, `SameClass`, `Target` | the leaves the counterfactuals lead to (`ctreex.targets`) |
+| `CounterfactualExplanation` | `prediction`, `leaf`, `target`, `leaf_distances`, `support` (target and other leaves per distance), `counterfactuals` (one `DistanceCounterfactuals` per distance), `ranked()`, `at_distance(d)` |
 | `FeatureSpec`, `Feature` | maps the columns of a one-hot encoded array to features; display names and category names; `encode`/`decode` |
 | `TreeStructure`, `load_tree` | a fitted tree independent of scikit-learn: from scikit-learn, to/from JSON, from pickles |
 | `ctreex.sklearn_tools` | Graphviz, text and matplotlib representations of scikit-learn trees, root-to-leaf paths |
