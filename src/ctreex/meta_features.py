@@ -3,10 +3,11 @@ Boolean meta-features describing the root-to-leaf paths of a decision tree.
 
 The logical conditions of the tree splits are turned into *meta-features*:
 
-* every one-hot (categorical) column used by the tree is a meta-feature;
+* every category (one-hot column) of a categorical feature used by the tree
+  is a meta-feature -- including the categories the tree never splits on;
 * the thresholds of a numerical feature cut its range into intervals --
-  e.g., ``A<=t1``, ``t1<A<=t2``, ..., ``tk<A`` -- and every interval is a
-  meta-feature.
+  e.g., ``A<=t1``, ``t1<A<=t2``, ..., ``tk<A`` (``A<=t`` and ``t<A`` for a
+  single threshold) -- and every interval is a meta-feature.
 
 Every leaf is then described by a vector over the meta-features:
 
@@ -25,18 +26,9 @@ Every leaf is then described by a vector over the meta-features:
 
 A data point is described in the same way with values ``1``/``-1``.
 
-This module is a pure numpy reimplementation of the original (2018) code
+This module is a numpy reimplementation of the original (2018) code
 (``tree_to_code``, ``code_to_featuresplits``, ``get_meta_features``,
 ``meta_features_per_leaf`` and ``instance_to_meta_features``).
-In the original code a numerical feature split at a single threshold ``t`` is
-represented only by the ``A<=t`` interval (no ``t<A`` meta-feature is
-created); the ``complete_numerical_intervals`` fix (see :mod:`ctreex.fixes`)
-adds the missing interval.
-Similarly, the original code created meta-features only for the categories
-(one-hot columns) the tree splits on, so the "all but one category excluded"
-rule could select a category although others -- never split on -- were
-allowed too; the ``complete_categorical_features`` fix creates meta-features
-for all the categories of every categorical feature used by the tree.
 """
 import dataclasses
 import itertools
@@ -208,34 +200,28 @@ def path_splits(paths):
     return splits
 
 
-def build_meta_features(splits, spec, complete_intervals=False,
-                        complete_categories=False):
+def build_meta_features(splits, spec):
     """
     Creates the meta-features from the split values of every column.
 
     The meta-features follow the order of the first appearance of the columns
-    in the tree paths; numerical intervals are sorted by their thresholds.
+    in the tree paths. A categorical feature gets a meta-feature for *every*
+    category (in the order of the specification), not only for the categories
+    the tree splits on; a numerical feature split at thresholds
+    ``t1 < ... < tk`` gets the intervals ``A<=t1``, ``t1<A<=t2``, ...,
+    ``tk<A`` (sorted by their thresholds).
 
     Parameters
     ----------
     splits : dict
         Output of :func:`path_splits`.
     spec : ctreex.features.FeatureSpec
-    complete_intervals : bool
-        Create both intervals (``A<=t`` and ``t<A``) of a numerical feature
-        split at a single threshold ``t``; the original implementation created
-        only ``A<=t``.
-    complete_categories : bool
-        Create a meta-feature for *every* category of a categorical feature
-        used by the tree (in the order of the specification); the original
-        implementation created them only for the categories (one-hot columns)
-        the tree splits on.
     """
     meta_features = []
     for name, values in splits.items():
         column = spec.column_index(name)
         feature, category = spec.columns[column]
-        if category is not None and complete_categories:
+        if category is not None:
             if any(m.feature == feature for m in meta_features):
                 continue  # all the categories were added already
             for value in spec.features[feature].values:
@@ -245,35 +231,17 @@ def build_meta_features(splits, spec, complete_intervals=False,
                     column_name, feature, CATEGORICAL,
                     spec.column_index(column_name), category=value))
             continue
-        if category is not None:
-            meta_features.append(MetaFeature(name, feature, CATEGORICAL,
-                                             column, category=category))
-            continue
-        numericals = sorted(values)
-        last = len(numericals) - 1
-        for s_i, s in enumerate(numericals):
-            s_txt = format_threshold(s)
-            if s_i == 0:  # first (a single threshold yields only this one)
-                meta_features.append(MetaFeature(
-                    '{}<={}'.format(name, s_txt), feature, NUMERICAL, column,
-                    upper=s_txt))
-                if last == 0 and complete_intervals:
-                    meta_features.append(MetaFeature(
-                        '{}<{}'.format(s_txt, name), feature, NUMERICAL,
-                        column, lower=s_txt))
-            elif s_i == last:
-                previous = format_threshold(numericals[s_i - 1])
-                meta_features.append(MetaFeature(
-                    '{}<{}<={}'.format(previous, name, s_txt), feature,
-                    NUMERICAL, column, lower=previous, upper=s_txt))
-                meta_features.append(MetaFeature(
-                    '{}<{}'.format(s_txt, name), feature, NUMERICAL, column,
-                    lower=s_txt))
+        thresholds = [format_threshold(t) for t in sorted(values)]
+        bounds = [None] + thresholds + [None]
+        for lower, upper in zip(bounds[:-1], bounds[1:]):
+            if lower is None:
+                text = '{}<={}'.format(name, upper)
+            elif upper is None:
+                text = '{}<{}'.format(lower, name)
             else:
-                previous = format_threshold(numericals[s_i - 1])
-                meta_features.append(MetaFeature(
-                    '{}<{}<={}'.format(previous, name, s_txt), feature,
-                    NUMERICAL, column, lower=previous, upper=s_txt))
+                text = '{}<{}<={}'.format(lower, name, upper)
+            meta_features.append(MetaFeature(
+                text, feature, NUMERICAL, column, lower=lower, upper=upper))
     return meta_features
 
 

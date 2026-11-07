@@ -52,8 +52,8 @@ for distance, counterfactual in explanation.ranked():
 
 `notebooks/` has three worked examples:
 a quick start, the [UCI German Credit][UCIgc] data and a tour of the rest of
-the API (feature specifications, explanation details, individual fixes, tree
-storage, leaf-distance plots and the scikit-learn helpers).
+the API (feature specifications, explanation details, tree storage,
+leaf-distance plots and the scikit-learn helpers).
 
 [UCIgc]: https://archive.ics.uci.edu/dataset/144/statlog+german+credit+data
 
@@ -61,7 +61,8 @@ storage, leaf-distance plots and the scikit-learn helpers).
 
 1. **Meta-features.**
    The conditions on the root-to-leaf paths become boolean meta-features:
-   the one-hot columns used by the tree and
+   all the categories (one-hot columns) of every categorical feature used by
+   the tree and
    the intervals between the split thresholds of every numerical feature
    (e.g., `age<=30.0`, `30.0<age<=50.0` and `50.0<age`).
    Every leaf is a vector over the meta-features with values
@@ -80,6 +81,9 @@ Counterfactuals can be restricted:
 
 * `excluded=['age']` -- never change these features; and
 * `included=['income']` -- change only these features.
+
+A leaf is used only if all the features that have to change to reach it are
+allowed, so every counterfactual at distance *d* changes exactly *d* features.
 
 For multi-class trees, `target_class='...'` restricts the counterfactuals to
 one class, and `explanation.ranked(with_classes=True)` reports the class each
@@ -101,7 +105,7 @@ tree as a whole.
 
 | Object | Purpose |
 |---|---|
-| `TreeCounterfactualExplainer(model, feature_spec, implementation, fixes, class_names)` | the explainer; `explain_instance(x, instance_values, max_distance, excluded, included, target_class, counterfactual)` returns a `CounterfactualExplanation` |
+| `TreeCounterfactualExplainer(model, feature_spec, class_names)` | the explainer; `explain_instance(x, instance_values, max_distance, excluded, included, target_class, counterfactual)` returns a `CounterfactualExplanation` |
 | `CounterfactualExplanation` | `prediction`, `leaf`, `leaf_distances`, `support` (leaves per distance), `counterfactuals` (one `DistanceCounterfactuals` per distance), `ranked()`, `at_distance(d)` |
 | `FeatureSpec`, `Feature` | maps the columns of a one-hot encoded array to features; display names and category names; `encode`/`decode` |
 | `TreeStructure`, `load_tree` | a fitted tree independent of scikit-learn: from scikit-learn, to/from JSON, from pickles |
@@ -121,20 +125,6 @@ sizes are used.
 When a tree stores feature names and they differ from the column names of the
 feature specification, the explainer warns.
 
-## Legacy and fixed behaviour
-
-* `implementation='legacy'` reproduces the original (2018) implementation of the
-algorithm;
-* `implementation='fixed'` (default) enables the fixes listed in
-  the [changelog](./CHANGELOG.md#001).
-
-It is possible to enable specific fixes for individual implementations too;
-e.g.,
-```python
-TreeCounterfactualExplainer(clf, spec, implementation='legacy',
-                            fixes={'deterministic_order': True})
-```
-
 ## Development
 
 ```sh
@@ -142,6 +132,15 @@ uv sync                     # Python 3.12 environment with the test dependencies
 uv run pytest
 uv sync --group notebooks && uv run jupyter lab notebooks/
 ```
+
+## The original implementation
+
+CtreeX started as a pandas-based implementation written in 2018.
+Versions 0.0.1 to 0.0.4 could reproduce it (`implementation='legacy'`) and
+switch its fixes on and off individually;
+since 0.1.0 only the fixed behaviour is available.
+To reproduce the original results, install version 0.0.4
+(see the [changelog](./CHANGELOG.md#001) for the list of fixes).
 
 ## Changelog
 

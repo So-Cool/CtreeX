@@ -45,10 +45,9 @@ class MissingDistance(KeyError):
     """No leaf lies at the requested distance from the data point."""
 
 
-def _unique(values, deterministic):
-    if deterministic:
-        return list(dict.fromkeys(values))
-    return list(set(values))
+def _unique(values):
+    """Removes duplicates keeping the order in which the values were found."""
+    return list(dict.fromkeys(values))
 
 
 def support_set(instance_class, distances, leaf_ids, leaf_classes):
@@ -183,10 +182,9 @@ def grow_region(interval, intervals):
     return interval, intervals
 
 
-def extract_counterfactuals(lmf, instance, instance_values, support, spec,
+def extract_counterfactuals(lmf, instance, instance_values, support,
                             distance=1, excluded=(), included=(), exact=True,
-                            counterfactual=True, whole_restrictions=False,
-                            target_class=None):
+                            counterfactual=True, target_class=None):
     """
     Extracts the counterfactuals of a data point at a given distance.
 
@@ -199,23 +197,17 @@ def extract_counterfactuals(lmf, instance, instance_values, support, spec,
         Base feature values of the data point (reported as ``'is'``).
     support : dict
         Output of :func:`support_set`.
-    spec : ctreex.features.FeatureSpec
     distance : int
         Distance of the leaves to use.
     excluded, included : collections.abc.Collection
         Base features that must not be (only these may be) part of a
         counterfactual; an empty ``included`` allows all features.
+        A leaf is used only if *all* the features that have to change to
+        reach it are allowed, so every counterfactual at distance ``d``
+        changes exactly ``d`` features.
     target_class : object, optional
         Use only the leaves of this class (counterfactuals towards a specific
         class of a multi-class tree).
-    whole_restrictions : bool
-        How ``excluded`` and ``included`` are applied. When ``True``, a leaf
-        is used only if *all* the features that have to change to reach it
-        are allowed (otherwise it is skipped). When ``False`` (the original
-        implementation), the forbidden features are removed from the
-        counterfactual of every leaf, which leaves incomplete counterfactuals
-        -- changing only the remaining features does not reach the leaf --
-        and empty ones.
     exact : bool
         Distance flavour used to find the features that differ.
     counterfactual : bool
@@ -246,52 +238,32 @@ def extract_counterfactuals(lmf, instance, instance_values, support, spec,
         row = lmf.row(leaf)
         changed = [group for group in lmf.groups
                    if similarity([group], row, instance, exact) > 0]
-        if whole_restrictions:
-            if any(feature in excluded or feature not in included
-                   for _, feature, _ in changed):
-                continue  # this leaf needs a forbidden feature
+        if any(feature in excluded or feature not in included
+               for _, feature, _ in changed):
+            continue  # this leaf needs a forbidden feature
         per_leaf[leaf] = {}
-        for group in changed:
-            kind, feature, indices = group
-            if feature in excluded or feature not in included:
-                continue
+        for kind, feature, indices in changed:
             values = row[indices]
             members = [lmf.meta_features[i] for i in indices]
+            # a leaf that tests a feature allows at least one of its
+            # intervals (categories)
             selected = [m for m, v in zip(members, values) if v != -1]
             if kind == NUMERICAL:
-                if not selected:
-                    # Legacy only (without complete_numerical_intervals): a
-                    # feature split at a single threshold t has only the
-                    # "A<=t" meta-feature; a leaf with "t<A" has it at -1.
-                    # Swapping the bounds of the excluded intervals yields the
-                    # complementary interval: (t, None) means "more than t".
-                    # (Kept as tuples like the original -- ranking then
-                    # treats them as categories, i.e., de-duplicates them.)
-                    # With complete intervals every leaf that tests the
-                    # feature has an interval at 1, so this is unreachable.
-                    wannabe = [(m.upper, m.lower) for m, v in
-                               zip(members, values) if v == -1]
-                else:
-                    intervals = [(m.lower, m.upper) for m in selected]
-                    wannabe = []
-                    while intervals:
-                        c = list(intervals.pop())
-                        c, intervals = grow_region(c, intervals)
-                        wannabe.append(c)
+                intervals = [(m.lower, m.upper) for m in selected]
+                wannabe = []
+                while intervals:
+                    c = list(intervals.pop())
+                    c, intervals = grow_region(c, intervals)
+                    wannabe.append(c)
             else:
-                if not selected:  # all used categories are excluded
-                    excluded_category = members[0].category
-                    wannabe = [c for c in spec.features[feature].values
-                               if c != excluded_category]
-                else:
-                    wannabe = [m.category for m in selected]
+                wannabe = [m.category for m in selected]
             per_leaf[leaf][feature] = {'is': [instance_values[feature]],
                                        'wannabe': wannabe}
             per_feature.setdefault(feature, []).append(leaf)
     return per_leaf, per_feature
 
 
-def _merge(per_leaf, leaves, feature, deterministic_order):
+def _merge(per_leaf, leaves, feature):
     """Merges the counterfactuals of one feature across leaves."""
     current, wannabe = [], []
     numerical = False
@@ -300,7 +272,7 @@ def _merge(per_leaf, leaves, feature, deterministic_order):
         wannabe += per_leaf[leaf][feature]['wannabe']
         if isinstance(per_leaf[leaf][feature]['wannabe'][0], list):
             numerical = True
-    current = _unique(current, deterministic_order)
+    current = _unique(current)
     if numerical:
         merged = []
         while wannabe:
@@ -310,12 +282,11 @@ def _merge(per_leaf, leaves, feature, deterministic_order):
         wannabe = sorted(merged, key=lambda x: float(
             x[0] if x[0] is not None else 0))
     else:
-        wannabe = _unique(wannabe, deterministic_order)
+        wannabe = _unique(wannabe)
     return {feature: {'is': current, 'wannabe': wannabe}}
 
 
-def rank_counterfactuals(per_leaf, per_feature, distance,
-                         deterministic_order=False, leaf_classes=None,
+def rank_counterfactuals(per_leaf, per_feature, distance, leaf_classes=None,
                          return_sources=False):
     """
     Orders counterfactuals by importance.
@@ -326,17 +297,15 @@ def rank_counterfactuals(per_leaf, per_feature, distance,
     by decreasing score; for larger distances every leaf's counterfactual is
     scored with the sum of its feature scores and listed by decreasing score.
 
+    Duplicated values are removed keeping the order in which they were found.
+
     Parameters
     ----------
-    deterministic_order : bool
-        Remove duplicated categories keeping their order (instead of the
-        hash-dependent ``list(set(...))`` of the original implementation).
     leaf_classes : dict, optional
-        ``{leaf id: class}``. When given, counterfactuals are merged and
-        scored per class; at distance 1 the leaves of different classes
-        are not merged, and features are scored by the leaves of the same
-        class. Without it all leaves are treated alike (the original
-        implementation); for two classes the results are identical.
+        ``{leaf id: class}``. Counterfactuals are merged and scored per
+        class: at distance 1 the leaves of different classes are not merged,
+        and features are scored by the leaves of the same class. Without it
+        all leaves are treated as one class.
     return_sources : bool
         Also return the leaves every ranked counterfactual comes from.
 
@@ -362,8 +331,7 @@ def rank_counterfactuals(per_leaf, per_feature, distance,
         order = sorted([(frequency[key], key) for key in frequency],
                        key=lambda x: x[0], reverse=True)
         for counter, (_, key) in enumerate(order):
-            counterfactuals[counter] = _merge(per_leaf, groups[key], key[1],
-                                              deterministic_order)
+            counterfactuals[counter] = _merge(per_leaf, groups[key], key[1])
             sources[counter] = list(groups[key])
     else:
         logger.debug('Feature frequencies: %s', frequency)
@@ -453,13 +421,13 @@ def describe_integer_range(interval):
     return describe_range(interval)
 
 
-def describe_counterfactuals(counterfactuals, spec, integer_ranges=False,
-                             short_thresholds=False):
+def describe_counterfactuals(counterfactuals, spec, integer_ranges=False):
     """
     Translates counterfactuals into human-readable values.
 
     Feature ids are replaced by ``Feature.display_name``, categories by
-    ``Feature.value_names`` and intervals by :func:`describe_range`.
+    ``Feature.value_names`` and intervals by :func:`describe_range` with
+    the thresholds in their shortest form (:func:`format_bound`).
 
     Parameters
     ----------
@@ -470,9 +438,6 @@ def describe_counterfactuals(counterfactuals, spec, integer_ranges=False,
     integer_ranges : bool
         Describe the ranges of integer features (``Feature.integer``) with
         whole numbers (:func:`describe_integer_range`).
-    short_thresholds : bool
-        Format the thresholds of the other numerical ranges in their shortest
-        form (:func:`format_bound`).
     """
     translation = {}
     for key, features in counterfactuals.items():
@@ -484,7 +449,7 @@ def describe_counterfactuals(counterfactuals, spec, integer_ranges=False,
                     wannabe = [describe_integer_range(i)
                                for i in cf['wannabe']]
                 else:
-                    wannabe = [describe_range(i, short=short_thresholds)
+                    wannabe = [describe_range(i, short=True)
                                for i in cf['wannabe']]
                 entry = {'is': list(cf['is']), 'wannabe': wannabe}
             else:

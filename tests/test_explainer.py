@@ -1,54 +1,30 @@
-import dataclasses
-
 import numpy as np
 import pytest
 
-from ctreex import Fixes, TreeCounterfactualExplainer, TreeStructure
+from ctreex import TreeCounterfactualExplainer, TreeStructure
 from ctreex.counterfactuals import rank_counterfactuals
-from ctreex.fixes import resolve_fixes
 from conftest import load_case
 
 
-def test_resolve_fixes():
-    assert resolve_fixes('legacy') == Fixes.legacy()
-    assert resolve_fixes('fixed') == Fixes.fixed()
-    custom = resolve_fixes('legacy', {'deterministic_order': True})
-    assert custom.deterministic_order and \
-        not custom.continue_past_missing_distance
-    with pytest.raises(ValueError):
-        resolve_fixes('newest')
-    with pytest.raises(TypeError):
-        resolve_fixes('fixed', ['deterministic_order'])
-
-
 def test_deterministic_order():
+    # duplicates are removed keeping the order in which they were found
     per_leaf = {1: {'job': {'is': ['a'], 'wannabe': ['c', 'b']}},
                 2: {'job': {'is': ['a'], 'wannabe': ['b', 'd']}}}
     per_feature = {'job': [1, 2]}
-    ranked = rank_counterfactuals(per_leaf, per_feature, 1,
-                                  deterministic_order=True)
+    ranked = rank_counterfactuals(per_leaf, per_feature, 1)
     assert ranked[0]['job']['wannabe'] == ['c', 'b', 'd']
 
 
-def test_continue_past_missing_distance():
-    case = load_case('distance_gap_case.json')
-    x = np.array(case['x'])
-    legacy = TreeCounterfactualExplainer(case['tree'],
-                                         implementation='legacy')
-    # the gap is caused by the incomplete categorical meta-features of the
-    # legacy implementation; with all the other fixes it does not occur
-    fixed = TreeCounterfactualExplainer(
-        case['tree'], fixes={'complete_categorical_features': False})
-    e_legacy = legacy.explain_instance(x)
-    e_fixed = fixed.explain_instance(x)
-    assert sorted(e_legacy.support) == [0, 1, 3]  # no leaf at distance 2
-    assert e_legacy.distances == [1]  # the legacy search stops at distance 2
-    assert e_fixed.distances == [1, 3]
-    assert len(e_fixed.at_distance(3).per_leaf) == 1
-    only_this_fix = TreeCounterfactualExplainer(
-        case['tree'], implementation='legacy',
-        fixes={'continue_past_missing_distance': True})
-    assert only_this_fix.explain_instance(x).distances == [1, 3]
+def test_no_missing_distances():
+    # leaves lie at every distance between 0 and the largest one
+    case = load_case('single_threshold_case.json')
+    explainer = TreeCounterfactualExplainer(case['tree'])
+    for x in np.array(case['X']):
+        e = explainer.explain_instance(x)
+        assert sorted(e.support) == list(range(max(e.support) + 1))
+    # distances beyond the largest one are skipped
+    e = explainer.explain_instance(np.array(case['X'])[0], max_distance=50)
+    assert e.distances == sorted(d for d in e.support if d > 0)
 
 
 def test_same_class_only_distance():
@@ -58,21 +34,16 @@ def test_same_class_only_distance():
         value=[[2, 2], [2, 0], [0, 2], [1, 0], [0, 2]], classes=['n', 'y'],
         feature_names=['x0', 'x1'])
     x = np.array([0., 1.])  # leaf 1 ('n'); leaf 4 ('y') needs x0 to change
-    for implementation in ('legacy', 'fixed'):
-        e = TreeCounterfactualExplainer(tree, implementation=implementation)\
-            .explain_instance(x)
-        assert e.prediction == 'n'
-        # leaf 3 (distance 2) has the same class -- no counterfactuals there
-        assert e.distances == [1, 2]
-        assert e.at_distance(2).per_leaf == {}
-        # x0 is split at a single threshold: the legacy implementation has
-        # no "0.5<x0" meta-feature and describes the interval with a tuple
-        interval = ('0.5', None) if implementation == 'legacy' \
-            else ['0.5', None]
-        assert e.at_distance(1).ranked[0] == {
-            'x0': {'is': [0], 'wannabe': [interval]}}
-        assert TreeCounterfactualExplainer(tree).describe(
-            e.at_distance(1).ranked)[0]['x0']['wannabe'] == ['more than 0.5']
+    explainer = TreeCounterfactualExplainer(tree)
+    e = explainer.explain_instance(x)
+    assert e.prediction == 'n'
+    # leaf 3 (distance 2) has the same class -- no counterfactuals there
+    assert e.distances == [1, 2]
+    assert e.at_distance(2).per_leaf == {}
+    assert e.at_distance(1).ranked[0] == {
+        'x0': {'is': [0], 'wannabe': [['0.5', None]]}}
+    assert explainer.describe(
+        e.at_distance(1).ranked)[0]['x0']['wannabe'] == ['more than 0.5']
 
 
 def test_explainer_on_sklearn_model():
@@ -101,39 +72,18 @@ def test_input_validation(toy_tree, toy_spec):
     with pytest.raises(ValueError):
         TreeCounterfactualExplainer(toy_tree, toy_spec,
                                     class_names=['only one'])
-    with pytest.raises(ValueError):
-        TreeCounterfactualExplainer(toy_tree, toy_spec,
-                                    implementation='original')
 
 
 def test_complete_numerical_intervals():
     case = load_case('single_threshold_case.json')
-    base = dataclasses.replace(Fixes.legacy(), deterministic_order=True)
-    legacy = TreeCounterfactualExplainer(case['tree'], fixes=base)
-    complete = TreeCounterfactualExplainer(
-        case['tree'],
-        fixes=dataclasses.replace(base, complete_numerical_intervals=True))
-    legacy_names = [m.name for m in legacy.meta_features]
-    complete_names = [m.name for m in complete.meta_features]
+    explainer = TreeCounterfactualExplainer(case['tree'])
+    names = [m.name for m in explainer.meta_features]
+    # features split at a single threshold have both intervals
     for feature in case['single_threshold']:
-        lower = [n for n in legacy_names if n.startswith(feature + '<=')]
+        lower = [n for n in names if n.startswith(feature + '<=')]
         assert len(lower) == 1
         upper = '{}<{}'.format(lower[0].split('<=')[1], feature)
-        assert upper not in legacy_names and upper in complete_names
-    assert len(complete_names) == len(legacy_names) + len(
-        case['single_threshold'])
-    # the counterfactuals of data points and their distances do not change
-    for x in np.array(case['X']):
-        a, b = legacy.explain_instance(x), complete.explain_instance(x)
-        assert np.array_equal(a.leaf_distances, b.leaf_distances)
-        assert a.support == b.support
-        assert [(c.distance, legacy.describe(c.ranked))
-                for c in a.counterfactuals] == \
-            [(c.distance, complete.describe(c.ranked))
-             for c in b.counterfactuals]
-    # ... but the leaf-to-leaf distances do
-    assert not np.array_equal(legacy.leaf_distance_matrix()[0],
-                              complete.leaf_distance_matrix()[0])
+        assert upper in names
 
 
 def test_disjoint_regions():
@@ -157,9 +107,7 @@ RESTRICTIONS = [{'excluded': ['a']}, {'excluded': ['d', 'c']},
 @pytest.mark.parametrize('restriction', RESTRICTIONS)
 def test_whole_counterfactual_restrictions(restriction):
     case = load_case('single_threshold_case.json')
-    fixed = TreeCounterfactualExplainer(case['tree'])
-    legacy = TreeCounterfactualExplainer(case['tree'],
-                                         implementation='legacy')
+    explainer = TreeCounterfactualExplainer(case['tree'])
     excluded = restriction.get('excluded', [])
     included = restriction.get('included', [])
 
@@ -167,8 +115,8 @@ def test_whole_counterfactual_restrictions(restriction):
         return feature not in excluded and (not included
                                             or feature in included)
     for x in np.array(case['X']):
-        full = fixed.explain_instance(x)
-        restricted = fixed.explain_instance(x, **restriction)
+        full = explainer.explain_instance(x)
+        restricted = explainer.explain_instance(x, **restriction)
         for found in restricted.counterfactuals:
             reference = full.at_distance(found.distance)
             for leaf, changes in found.per_leaf.items():
@@ -181,31 +129,6 @@ def test_whole_counterfactual_restrictions(restriction):
                 if all(allowed(f) for f in changes):
                     assert leaf in found.per_leaf
             assert all(cf for cf in found.ranked.values())
-        # the legacy implementation truncates the counterfactuals instead
-        legacy_full = legacy.explain_instance(x)
-        legacy_restricted = legacy.explain_instance(x, **restriction)
-        for found in legacy_restricted.counterfactuals:
-            reference = legacy_full.at_distance(found.distance)
-            assert set(found.per_leaf) == set(reference.per_leaf)
-            for leaf, changes in found.per_leaf.items():
-                assert changes == {f: v for f, v in
-                                   reference.per_leaf[leaf].items()
-                                   if allowed(f)}
-
-
-def test_restriction_fix_switch():
-    case = load_case('single_threshold_case.json')
-    truncating = TreeCounterfactualExplainer(
-        case['tree'], fixes={'whole_counterfactual_restrictions': False})
-    found_truncated = found_incomplete = False
-    for restriction in RESTRICTIONS:
-        for x in np.array(case['X']):
-            for found in truncating.explain_instance(
-                    x, **restriction).counterfactuals:
-                for changes in found.per_leaf.values():
-                    found_incomplete |= len(changes) < found.distance
-                    found_truncated |= not changes
-    assert found_incomplete and found_truncated
 
 
 def _apply(spec, values, changes):
@@ -239,18 +162,16 @@ def _category_gap_tree():
 def test_complete_categorical_features():
     tree = _category_gap_tree()
     x = np.array([30., 0, 0, 1])  # age 30, job c -> leaf 2 ('no')
-    legacy = TreeCounterfactualExplainer(tree, implementation='legacy')
-    fixed = TreeCounterfactualExplainer(tree)
-    e_legacy, e_fixed = legacy.explain_instance(x), fixed.explain_instance(x)
-    assert e_legacy.leaf == e_fixed.leaf == 2
-    # the legacy description of leaf 2 requires job a (job c was invisible)
-    assert e_legacy.leaf_distances.tolist() == [1, 1, 2, 2]
-    assert e_fixed.leaf_distances.tolist() == [0, 1, 1, 2]
-    # "age more than 40" alone reaches leaf 5 ('yes'); the legacy version
-    # also asked for job b
-    assert e_fixed.at_distance(1).per_leaf[5] == {
+    explainer = TreeCounterfactualExplainer(tree)
+    # job c is described although the tree never splits on it
+    assert [m.name for m in explainer.meta_features
+            if m.feature == 'job'] == ['job_a', 'job_b', 'job_c']
+    e = explainer.explain_instance(x)
+    assert e.leaf == 2
+    assert e.leaf_distances.tolist() == [0, 1, 1, 2]
+    # "age more than 40" alone reaches leaf 5 ('yes')
+    assert e.at_distance(1).per_leaf[5] == {
         'age': {'is': [30], 'wannabe': [['40.0', None]]}}
-    assert set(e_legacy.at_distance(2).per_leaf[5]) == {'age', 'job'}
 
 
 def test_counterfactuals_reach_their_leaves():
@@ -299,14 +220,6 @@ def test_multi_class(three_classes):
                  for _, classes, cf in e.ranked(with_classes=True)}
     assert described == {('mid',): ['between 9.5 and 19.5'],
                          ('high',): ['more than 19.5']}
-    # the legacy implementation merges the leaves of both classes
-    legacy = TreeCounterfactualExplainer(three_classes, ['x'],
-                                         implementation='legacy')
-    merged = legacy.explain_instance(x).ranked(with_classes=True)
-    assert len(merged) == 1
-    distance, classes, cf = merged[0]
-    assert sorted(classes) == ['high', 'mid']
-    assert legacy.describe({0: cf})[0]['x']['wannabe'] == ['more than 9.5']
 
 
 def test_target_class(three_classes):
@@ -323,14 +236,10 @@ def test_target_class(three_classes):
         explainer.explain_instance(x, target_class='very high')
 
 
-def test_per_class_ranking_two_classes():
-    # with two classes per-class ranking changes nothing
+def test_ranked_counterfactuals_lead_to_one_class():
     case = load_case('single_threshold_case.json')
-    per_class = TreeCounterfactualExplainer(case['tree'])
-    together = TreeCounterfactualExplainer(
-        case['tree'], fixes={'per_class_ranking': False})
+    explainer = TreeCounterfactualExplainer(case['tree'])
     for x in np.array(case['X']):
-        a, b = per_class.explain_instance(x), together.explain_instance(x)
-        assert a.ranked(with_classes=True) == b.ranked(with_classes=True)
+        e = explainer.explain_instance(x)
         assert all(len(classes) == 1
-                   for _, classes, _ in a.ranked(with_classes=True))
+                   for _, classes, _ in e.ranked(with_classes=True))

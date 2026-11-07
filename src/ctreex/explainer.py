@@ -26,7 +26,6 @@ from ctreex import distances
 from ctreex import meta_features as mf
 from ctreex import _validation as val
 from ctreex.features import FeatureSpec
-from ctreex.fixes import resolve_fixes
 from ctreex.tree import load_tree
 
 __all__ = ['TreeCounterfactualExplainer', 'CounterfactualExplanation',
@@ -59,8 +58,7 @@ class DistanceCounterfactuals(object):
         ``{leaf id: class}`` -- the class every leaf of ``per_leaf`` predicts.
     ranked_classes : dict
         ``{rank: [classes]}`` -- the classes a ranked counterfactual leads to
-        (a single class unless counterfactuals of different classes were
-        merged, see the ``per_class_ranking`` fix).
+        (counterfactuals are merged per class, so this is a single class).
     """
     distance: int
     per_leaf: dict
@@ -145,11 +143,6 @@ class TreeCounterfactualExplainer(object):
         Description of the data columns. A list of column names is converted
         with :meth:`FeatureSpec.from_column_names`; when omitted the feature
         names stored in the tree are used.
-    implementation : {'legacy', 'fixed'}
-        ``'legacy'`` reproduces the original (2018) implementation exactly;
-        ``'fixed'`` enables all the behaviour-changing fixes.
-    fixes : ctreex.fixes.Fixes or dict, optional
-        Per-fix overrides (see :mod:`ctreex.fixes`).
     class_names : dict or list, optional
         Names of the classes (a dictionary mapping class labels to names or a
         list following ``model.classes``); used for predictions and leaves.
@@ -158,7 +151,6 @@ class TreeCounterfactualExplainer(object):
     ----------
     tree : TreeStructure
     spec : FeatureSpec
-    fixes : Fixes
     paths : list of ctreex.meta_features.Path
     meta_features : list of ctreex.meta_features.MetaFeature
     leaf_meta_features : ctreex.meta_features.LeafMetaFeatures
@@ -171,8 +163,7 @@ class TreeCounterfactualExplainer(object):
     >>> explanation = explainer.explain_instance(X[0])
     """
 
-    def __init__(self, model, feature_spec=None, implementation='fixed',
-                 fixes=None, class_names=None):
+    def __init__(self, model, feature_spec=None, class_names=None):
         self.tree = load_tree(model)
         if feature_spec is None:
             if self.tree.feature_names is None:
@@ -190,8 +181,6 @@ class TreeCounterfactualExplainer(object):
                           'make sure that the columns are in the same order.',
                           UserWarning)
         self.spec = feature_spec
-        self.implementation = implementation
-        self.fixes = resolve_fixes(implementation, fixes)
 
         if class_names is not None and not isinstance(class_names, dict):
             if len(class_names) != len(self.tree.classes):
@@ -200,10 +189,7 @@ class TreeCounterfactualExplainer(object):
         self.class_names = class_names
         self.paths = mf.tree_paths(self.tree, self.spec, class_names)
         self.splits = mf.path_splits(self.paths)
-        self.meta_features = mf.build_meta_features(
-            self.splits, self.spec,
-            complete_intervals=self.fixes.complete_numerical_intervals,
-            complete_categories=self.fixes.complete_categorical_features)
+        self.meta_features = mf.build_meta_features(self.splits, self.spec)
         self.leaf_meta_features = mf.leaf_meta_features(self.paths,
                                                         self.meta_features)
         self._leaf_distance_matrix = None
@@ -256,8 +242,8 @@ class TreeCounterfactualExplainer(object):
             features).
         excluded, included : collections.abc.Collection
             Base features that must not (only these may) appear in the
-            counterfactuals (see the whole_counterfactual_restrictions
-            fix in :mod:`ctreex.fixes`).
+            counterfactuals; a leaf is used only if all the features that
+            have to change to reach it are allowed.
         target_class : object, optional
             Explain only how to reach this class (multi-class trees); by
             default counterfactuals lead to any other class.
@@ -301,21 +287,15 @@ class TreeCounterfactualExplainer(object):
         for distance in range(1, max_distance + 1):
             try:
                 per_leaf, per_feature = cfs.extract_counterfactuals(
-                    lmf, instance, instance_values, support, self.spec,
+                    lmf, instance, instance_values, support,
                     distance=distance, excluded=excluded, included=included,
-                    whole_restrictions=self.fixes.whole_counterfactual_restrictions,
                     target_class=target_class, counterfactual=counterfactual)
-            except cfs.MissingDistance:
-                if self.fixes.continue_past_missing_distance:
-                    continue
-                break
+            except cfs.MissingDistance:  # no leaf this far from the point
+                continue
             leaf_classes = {leaf: _python(lmf.leaf_classes[lmf.leaf_index(
                 leaf)]) for leaf in per_leaf}
             ranked, sources = cfs.rank_counterfactuals(
-                per_leaf, per_feature, distance,
-                deterministic_order=self.fixes.deterministic_order,
-                leaf_classes=(leaf_classes if self.fixes.per_class_ranking
-                              else None),
+                per_leaf, per_feature, distance, leaf_classes=leaf_classes,
                 return_sources=True)
             ranked_classes = {
                 rank: list(dict.fromkeys(leaf_classes[leaf]
@@ -335,8 +315,9 @@ class TreeCounterfactualExplainer(object):
         Human-readable version of counterfactuals (see
         :func:`ctreex.counterfactuals.describe_counterfactuals`).
 
-        Thresholds are shortened according to the ``short_thresholds`` fix.
+        Thresholds are shown in their shortest form
+        (:func:`ctreex.counterfactuals.format_bound`), e.g.,
+        ``'more than 0.8'`` instead of ``'more than 0.800000011920929'``.
         """
         return cfs.describe_counterfactuals(
-            counterfactuals, self.spec, integer_ranges=integer_ranges,
-            short_thresholds=self.fixes.short_thresholds)
+            counterfactuals, self.spec, integer_ranges=integer_ranges)

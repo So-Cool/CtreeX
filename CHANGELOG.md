@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.1.0 (unreleased)
+
+* **The legacy implementation is removed.**
+  The explainer has a single behaviour -- the one previously selected with
+  `implementation='fixed'` (the default) -- so
+  the `implementation` and `fixes` arguments of `TreeCounterfactualExplainer`,
+  its `fixes` and `implementation` attributes, and
+  `ctreex.Fixes` (the `ctreex.fixes` module) are gone.
+  All the fixes listed under [0.0.1](#001) are always applied:
+  categorical features are described by all their categories,
+  numerical features split at a single threshold by two intervals,
+  `excluded` and `included` select whole counterfactuals,
+  distance-1 counterfactuals are merged per class,
+  alternative values keep the order in which they were found,
+  distances without leaves are skipped and
+  `describe` shows thresholds in their shortest form
+  (the structured counterfactuals keep the exact thresholds).
+  To reproduce the original implementation, use version 0.0.4.
+* **Legacy behaviour has changed.**
+  Functions whose arguments only selected the legacy behaviour changed:
+  `build_meta_features(splits, spec)`, `extract_counterfactuals`
+  (without `spec` and `whole_restrictions`),
+  `rank_counterfactuals` (without `deterministic_order`) and
+  `describe_counterfactuals` (without `short_thresholds`).
+
 ## 0.0.4
 
 * **Class-equivalent explanations.**

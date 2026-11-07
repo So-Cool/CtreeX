@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from ctreex import TreeCounterfactualExplainer
+from ctreex import TreeCounterfactualExplainer, TreeStructure
 from ctreex.counterfactuals import (describe_range, grow_region,
                                     support_set_metric, volatility_index)
 from ctreex.distances import categorical_distance, exact_distance
@@ -10,13 +10,6 @@ from ctreex.distances import categorical_distance, exact_distance
 
 @pytest.fixture
 def explainer(toy_tree, toy_spec):
-    # the legacy implementation: meta-features only for the split categories
-    return TreeCounterfactualExplainer(toy_tree, toy_spec,
-                                       implementation='legacy')
-
-
-@pytest.fixture
-def fixed_explainer(toy_tree, toy_spec):
     return TreeCounterfactualExplainer(toy_tree, toy_spec)
 
 
@@ -24,21 +17,36 @@ def test_paths_and_meta_features(explainer):
     assert [p.leaf for p in explainer.paths] == [2, 3, 5, 6]
     assert explainer.paths[0].conditions == [('age', '<=', 30.),
                                              ('job_a', '=', 0)]
+    # every category of a categorical feature used by the tree is described,
+    # also those the tree never splits on (job_b and job_c)
     assert [m.name for m in explainer.meta_features] == [
-        'age<=30.0', '30.0<age<=50.0', '50.0<age', 'job_a']
+        'age<=30.0', '30.0<age<=50.0', '50.0<age', 'job_a', 'job_b', 'job_c']
     lmf = explainer.leaf_meta_features
-    assert lmf.matrix.tolist() == [[1, -1, -1, -1], [1, -1, -1, 1],
-                                   [-1, 1, -1, 0], [-1, -1, 1, 0]]
+    assert lmf.matrix.tolist() == [
+        [1, -1, -1, -1, 0, 0], [1, -1, -1, 1, -1, -1],
+        [-1, 1, -1, 0, 0, 0], [-1, -1, 1, 0, 0, 0]]
     assert lmf.leaf_classes.tolist() == ['no', 'yes', 'yes', 'no']
     assert [(kind, feature) for kind, feature, _ in lmf.groups] == [
         ('categorical', 'job'), ('numerical', 'age')]
+
+
+def test_single_threshold_intervals():
+    tree = TreeStructure(
+        children_left=[1, -1, -1], children_right=[2, -1, -1],
+        feature=[0, -2, -2], threshold=[0.5, -2, -2],
+        value=[[1, 1], [1, 0], [0, 1]], classes=['n', 'y'])
+    explainer = TreeCounterfactualExplainer(tree, ['x'])
+    # a feature split at a single threshold has two intervals
+    assert [m.name for m in explainer.meta_features] == ['x<=0.5', '0.5<x']
+    assert explainer.leaf_meta_features.matrix.tolist() == [[1, -1],
+                                                            [-1, 1]]
 
 
 def test_explanation(explainer, toy_spec):
     x = toy_spec.encode({'age': 25, 'job': 'b'})
     e = explainer.explain_instance(x)
     assert (e.leaf, e.prediction) == (2, 'no')
-    assert e.meta_features.tolist() == [1, -1, -1, -1]
+    assert e.meta_features.tolist() == [1, -1, -1, -1, 1, -1]
     assert e.leaf_distances.tolist() == [0, 1, 1, 1]
     assert e.support == {0: {'same': [2], 'other': []},
                          1: {'same': [6], 'other': [3, 5]}}
@@ -50,25 +58,6 @@ def test_explanation(explainer, toy_spec):
     assert explainer.describe(found.ranked) == {
         0: {'job type': {'is': ['baker'], 'wannabe': ['artist']}},
         1: {'age': {'is': [25], 'wannabe': ['between 30.0 and 50.0']}}}
-
-
-def test_fixed_meta_features(fixed_explainer, toy_spec):
-    # every category of a categorical feature used by the tree is described
-    assert [m.name for m in fixed_explainer.meta_features] == [
-        'age<=30.0', '30.0<age<=50.0', '50.0<age', 'job_a', 'job_b', 'job_c']
-    assert fixed_explainer.leaf_meta_features.matrix.tolist() == [
-        [1, -1, -1, -1, 0, 0], [1, -1, -1, 1, -1, -1],
-        [-1, 1, -1, 0, 0, 0], [-1, -1, 1, 0, 0, 0]]
-    e = fixed_explainer.explain_instance(toy_spec.encode({'age': 25,
-                                                          'job': 'b'}))
-    assert e.meta_features.tolist() == [1, -1, -1, -1, 1, -1]
-    assert e.leaf_distances.tolist() == [0, 1, 1, 1]
-    assert e.at_distance(1).ranked == {
-        0: {'job': {'is': ['b'], 'wannabe': ['a']}},
-        1: {'age': {'is': [25], 'wannabe': [['30.0', '50.0']]}}}
-    matrix, _, _ = fixed_explainer.leaf_distance_matrix()
-    assert matrix[0, 1] == 1
-    assert matrix[0, 2] == pytest.approx(2 / 6)  # 6 meta-features now
 
 
 def test_excluded_and_included(explainer, toy_spec):
@@ -83,7 +72,8 @@ def test_leaf_distance_matrix(explainer):
     matrix, ids, _ = explainer.leaf_distance_matrix()
     assert ids.tolist() == [2, 3, 5, 6]
     assert matrix[0, 1] == 1      # job: one-hot vectors disagree
-    assert matrix[0, 2] == 0.5    # age: 2 of 4 meta-features disagree
+    # age: 2 of the 6 meta-features disagree
+    assert matrix[0, 2] == pytest.approx(2 / 6)
     assert np.allclose(matrix, matrix.T)
 
 
@@ -171,20 +161,19 @@ def test_short_thresholds():
         assert float(short) <= threshold < float(below)
 
 
-def test_short_thresholds_switch():
+def test_short_thresholds_in_descriptions():
     sklearn_tree = pytest.importorskip('sklearn.tree')
     X = np.array([[0.6], [0.7], [1.0], [1.2]], dtype=np.float32)
     clf = sklearn_tree.DecisionTreeClassifier(random_state=0).fit(
         X, ['a', 'a', 'b', 'b'])
     # the threshold, 0.8499999940395355, lies just below the 32-bit 0.85
     # (0.85 goes right), hence the largest 32-bit number below it is shown
-    for implementation, expected in (('fixed', 'more than 0.84999996'),
-                                     ('legacy', 'more than 0.8499999940395355')):
-        explainer = TreeCounterfactualExplainer(clf, ['x'],
-                                                implementation=implementation)
-        ranked = explainer.explain_instance(np.array([0.6])).counterfactuals[
-            0].ranked
-        assert explainer.describe(ranked)[0]['x']['wannabe'] == [expected]
+    explainer = TreeCounterfactualExplainer(clf, ['x'])
+    found = explainer.explain_instance(np.array([0.6])).counterfactuals[0]
+    assert explainer.describe(found.ranked)[0]['x']['wannabe'] == [
+        'more than 0.84999996']
+    # the structured counterfactuals keep the exact threshold
+    assert found.ranked[0]['x']['wannabe'] == [['0.8499999940395355', None]]
     assert clf.apply(np.array([[0.85]], dtype=np.float32))[0] == \
         clf.apply(np.array([[1.2]], dtype=np.float32))[0]
 
@@ -208,12 +197,12 @@ def test_class_equivalent(explainer, toy_spec):
                                    target_class='yes')
 
 
-def test_class_equivalent_keeps_the_prediction(fixed_explainer, toy_spec):
+def test_class_equivalent_keeps_the_prediction(explainer, toy_spec):
     for age in (20, 35, 60):
         for job in 'abc':
             values = {'age': age, 'job': job}
             x = toy_spec.encode(values)
-            e = fixed_explainer.explain_instance(x, counterfactual=False)
+            e = explainer.explain_instance(x, counterfactual=False)
             for found in e.counterfactuals:
                 # (empty at distances with leaves of the other class only)
                 assert set(found.leaf_classes.values()) <= {e.prediction}
