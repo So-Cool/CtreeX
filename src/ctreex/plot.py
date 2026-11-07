@@ -92,15 +92,13 @@ def leaf_metric_barplot(leaf_id, matrix, leaf_ids, leaf_classes, ax=None):
     return ax
 
 
-def leaf_metric_histogram(leaf_id, matrix, leaf_ids, leaf_classes,
-                          bins_step=0.5, ax=None):
-    """Overlaid histograms (one per class) of the distances from
-    ``leaf_id`` to all the leaves."""
+def leaf_metric_histogram(leaf_id, matrix, leaf_ids, leaf_classes, ax=None):
+    """Overlaid histograms (one per class) of the (whole-number) distances
+    from ``leaf_id`` to all the leaves; one bin per distance."""
     plt = _plt()
     leaf_ids, leaf_classes = np.asarray(leaf_ids), np.asarray(leaf_classes)
     column = np.asarray(matrix)[:, int(np.flatnonzero(leaf_ids == leaf_id)[0])]
-    bins = np.arange(np.floor(column.min()),
-                     np.ceil(column.max()) + bins_step, bins_step)
+    bins = np.arange(np.floor(column.min()), np.ceil(column.max()) + 2)
     if ax is None:
         _, ax = plt.subplots()
     for c in sorted(set(leaf_classes.tolist())):

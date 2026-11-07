@@ -1,7 +1,7 @@
 """Input validation helpers."""
 import numpy as np
 
-__all__ = ['check_columns', 'check_row', 'check_array_2d']
+__all__ = ['check_columns', 'check_row', 'check_array_2d', 'check_features']
 
 
 def check_columns(columns):
@@ -42,3 +42,32 @@ def check_array_2d(array, n_columns=None):
         raise ValueError('The data have {} columns but {} were expected.'
                          ''.format(array.shape[1], n_columns))
     return array
+
+
+def check_features(features, spec, name):
+    """
+    Validates a collection of base feature names (e.g., ``excluded``).
+
+    Parameters
+    ----------
+    features : collections.abc.Collection of str
+        The feature names.
+    spec : ctreex.features.FeatureSpec
+        The names have to be features of this specification.
+    name : str
+        The name of the argument (used in error messages).
+
+    Returns
+    -------
+    list of str
+    """
+    if isinstance(features, str):
+        raise TypeError('{} has to be a collection of feature names, not a '
+                        'string; e.g., [{!r}].'.format(name, features))
+    features = list(features)
+    unknown = [f for f in features if f not in spec.features]
+    if unknown:
+        raise ValueError('Unknown features in {}: {}; the features are {}.'
+                         ''.format(name, ', '.join(map(repr, unknown)),
+                                   ', '.join(map(repr, spec.features))))
+    return features

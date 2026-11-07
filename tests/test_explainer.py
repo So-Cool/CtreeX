@@ -243,3 +243,41 @@ def test_ranked_counterfactuals_lead_to_one_class():
         e = explainer.explain_instance(x)
         assert all(len(classes) == 1
                    for _, classes, _ in e.ranked(with_classes=True))
+
+
+def test_merged_intervals_are_ordered():
+    # "at most -5" (unbounded below) comes before "between -3 and -1"
+    per_leaf = {1: {'x': {'is': [0], 'wannabe': [['-3.0', '-1.0']]}},
+                2: {'x': {'is': [0], 'wannabe': [[None, '-5.0']]}},
+                3: {'x': {'is': [0], 'wannabe': [['2.0', None]]}}}
+    ranked = rank_counterfactuals(per_leaf, {'x': [1, 2, 3]}, 1)
+    assert ranked[0]['x']['wannabe'] == [[None, '-5.0'], ['-3.0', '-1.0'],
+                                         ['2.0', None]]
+
+
+def test_disjoint_regions_below_zero():
+    sklearn_tree = pytest.importorskip('sklearn.tree')
+    X = np.arange(-30, 1, dtype=float).reshape(-1, 1)
+    y = np.where((X[:, 0] <= -20) | (X[:, 0] > -10), 'yes', 'no')
+    clf = sklearn_tree.DecisionTreeClassifier(random_state=0).fit(X, y)
+    explainer = TreeCounterfactualExplainer(clf, ['x'])
+    explanation = explainer.explain_instance(np.array([-15.]))
+    assert explainer.describe(explanation.at_distance(1).ranked) == {
+        0: {'x': {'is': [-15], 'wannabe': ['less or equal to -19.5',
+                                           'more than -9.5']}}}
+
+
+def test_restriction_validation(toy_tree, toy_spec):
+    explainer = TreeCounterfactualExplainer(toy_tree, toy_spec)
+    x = toy_spec.encode({'age': 25, 'job': 'b'})
+    with pytest.raises(ValueError, match="'agee'"):
+        explainer.explain_instance(x, excluded=['agee'])
+    with pytest.raises(ValueError, match="'job_a'"):
+        explainer.explain_instance(x, included=['age', 'job_a'])
+    with pytest.raises(TypeError):
+        explainer.explain_instance(x, excluded='age')
+    # display names are not feature names
+    with pytest.raises(ValueError):
+        explainer.explain_instance(x, excluded=['job type'])
+    assert explainer.explain_instance(x, excluded=('job',)).at_distance(
+        1).per_feature == {'age': [5]}

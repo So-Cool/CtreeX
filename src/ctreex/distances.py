@@ -2,29 +2,23 @@
 Distances between leaves and between a data point and the leaves.
 
 Distances are computed per base feature (a *group* of meta-features) and
-summed. Two (``similarity``) flavours are implemented:
+summed;
+both flavours (``similarity``) count features, so they are whole numbers:
 
 * **exact** (data point vs leaf) -- for every base feature: ``1`` if the leaf's
   path contradicts the data point's value of that feature, ``0`` otherwise.
   The distance is therefore the number of features that would have to change
   for the data point to reach the leaf (a "hop" count).
-* **leaf vs leaf** -- numerical features contribute the number of intervals
-  that are ``1`` in one leaf and ``-1`` in the other, divided by the total
-  number of meta-features; categorical features contribute the fraction of
-  disagreeing completions of their partially specified one-hot vectors.
+* **leaf vs leaf** -- for every base feature: ``1`` if the two leaves allow
+  no common value of the feature -- i.e., their intervals (categories) do not
+  overlap -- ``0`` otherwise.
+  The distance is the number of features on which the two leaves are
+  incompatible.
 """
 import numpy as np
 
-from ctreex.features import CATEGORICAL, NUMERICAL
-
-__all__ = ['numerical_identity', 'exact_distance', 'numerical_distance',
-           'categorical_distance', 'similarity', 'leaf_distance_matrix',
-           'instance_leaf_distances']
-
-
-def numerical_identity(a, b):
-    """``1`` when one value is ``1`` and the other ``-1``; else ``0``."""
-    return 1 if (a == -1 and b == 1) or (a == 1 and b == -1) else 0
+__all__ = ['exact_distance', 'allowed', 'incompatible', 'similarity',
+           'leaf_distance_matrix', 'instance_leaf_distances']
 
 
 def exact_distance(x, y):
@@ -57,44 +51,44 @@ def exact_distance(x, y):
     raise ValueError('Exact vector of length 0.')
 
 
-def numerical_distance(x, y, n_meta_features):
-    """Disagreeing intervals divided by the total number of meta-features."""
-    return sum(numerical_identity(i, j) for i, j in zip(x, y)) / float(
-        n_meta_features)
-
-
-def _differ(alpha, beta):
-    return 0 if np.array_equal(alpha, beta) else 1
-
-
-def _completions(v):
-    zeros = np.flatnonzero(v == 0)
-    if zeros.size == 0:
-        return [v]
-    variations = []
-    for i in zeros:
-        c = v.copy()
-        c[i] = 1
-        c[c == 0] = -1
-        variations.append(c)
-    return variations
-
-
-def categorical_distance(x, y):
+def allowed(x):
     """
-    Distance between two (partial) one-hot descriptions of a feature.
+    The meta-features of one base feature a leaf allows.
 
-    Every ``0`` (unconstrained) entry yields a completion in which that entry
-    is ``1`` and the other unconstrained entries are ``-1``; the distance is
-    the fraction of disagreeing pairs of completions.
+    A leaf allows the intervals (categories) at ``1``;
+    when none is ``1``, those at ``0`` -- i.e., all of them when the leaf does
+    not test the feature.
+
+    Parameters
+    ----------
+    x : numpy.ndarray
+        Meta-feature values of one base feature for a leaf (-1 / 0 / 1).
+
+    Returns
+    -------
+    numpy.ndarray
+        Boolean mask over the meta-features of the feature.
     """
-    if not np.any(x) or not np.any(y):
-        return 0
-    if _differ(x, y) == 0:
-        return 0
-    xs, ys = _completions(x), _completions(y)
-    d = sum(_differ(i, j) for i in xs for j in ys)
-    return d / float(len(xs) * len(ys))
+    ones = x == 1
+    return ones if np.any(ones) else x == 0
+
+
+def incompatible(x, y):
+    """
+    Whether two leaves allow no common value of a base feature.
+
+    Parameters
+    ----------
+    x, y : numpy.ndarray
+        Meta-feature values of one base feature for two leaves (-1 / 0 / 1).
+
+    Returns
+    -------
+    int
+        ``1`` if the allowed intervals (categories) do not overlap, ``0``
+        otherwise.
+    """
+    return 0 if np.any(allowed(x) & allowed(y)) else 1
 
 
 def similarity(groups, a, b, exact=False):
@@ -109,25 +103,27 @@ def similarity(groups, a, b, exact=False):
         Meta-feature vectors; in ``exact`` mode ``a`` describes a leaf and
         ``b`` a data point.
     exact : bool
-        Use :func:`exact_distance` for every feature.
+        Use :func:`exact_distance` for every feature (otherwise
+        :func:`incompatible`).
     """
     distance = 0
-    for kind, _, indices in groups:
+    for _, _, indices in groups:
         x, y = a[indices], b[indices]
         if exact:
             distance += exact_distance(x, y)
-        elif kind == NUMERICAL:
-            distance += numerical_distance(x, y, a.shape[0])
-        elif kind == CATEGORICAL:
-            distance += categorical_distance(x, y)
         else:
-            raise ValueError('Unknown feature type: {!r}.'.format(kind))
+            distance += incompatible(x, y)
     return distance
 
 
 def leaf_distance_matrix(lmf):
     """
     Pairwise (symmetric) leaf-to-leaf distances.
+
+    The distance between two leaves is the number of base features on which
+    they are incompatible (:func:`incompatible`);
+    since the leaves partition the feature space, distinct leaves are at least
+    ``1`` apart.
 
     Parameters
     ----------
@@ -136,11 +132,11 @@ def leaf_distance_matrix(lmf):
     Returns
     -------
     numpy.ndarray
-        ``(n_leaves, n_leaves)`` array; rows and columns follow
-        ``lmf.leaf_ids``.
+        ``(n_leaves, n_leaves)`` integer array;
+        rows and columns follow ``lmf.leaf_ids``.
     """
     n = lmf.leaf_ids.shape[0]
-    matrix = np.zeros((n, n), dtype=np.float64)
+    matrix = np.zeros((n, n), dtype=np.int64)
     for i in range(n):
         for j in range(i + 1, n):
             d = similarity(lmf.groups, lmf.matrix[i], lmf.matrix[j])

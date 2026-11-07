@@ -78,14 +78,22 @@ def support_set(instance_class, distances, leaf_ids, leaf_classes):
     return out
 
 
-def _metric_bins(matrix, bins_step):
-    return np.arange(np.floor(np.min(matrix)),
-                     np.ceil(np.max(matrix)) + bins_step, bins_step)
+def _leaf_column(leaf, matrix, leaf_ids, leaf_classes):
+    """Distances from a leaf to all the leaves and the class of the leaf."""
+    leaf_ids, leaf_classes = np.asarray(leaf_ids), np.asarray(leaf_classes)
+    position = np.flatnonzero(leaf_ids == leaf)
+    if position.size != 1:
+        raise KeyError('Unknown leaf: {}.'.format(leaf))
+    column = np.asarray(matrix)[:, int(position[0])]
+    if np.any(column != np.round(column)):
+        raise ValueError('Leaf-to-leaf distances have to be whole numbers.')
+    return (column.astype(np.int64), leaf_ids, leaf_classes,
+            leaf_classes[int(position[0])])
 
 
-def support_set_metric(leaf, matrix, leaf_ids, leaf_classes, bins_step=0.5):
+def support_set_metric(leaf, matrix, leaf_ids, leaf_classes):
     """
-    Groups leaves by their (binned) distance to a given leaf.
+    Groups leaves by their distance to a given leaf.
 
     Parameters
     ----------
@@ -93,60 +101,59 @@ def support_set_metric(leaf, matrix, leaf_ids, leaf_classes, bins_step=0.5):
         The reference leaf id.
     matrix : numpy.ndarray
         Leaf-to-leaf distance matrix (see
-        :func:`ctreex.distances.leaf_distance_matrix`).
+        :func:`ctreex.distances.leaf_distance_matrix`);
+        the distances are whole numbers.
     leaf_ids, leaf_classes : numpy.ndarray
         Leaf ids and classes describing the rows/columns of ``matrix``.
-    bins_step : float
-        Width of the distance bins.
 
     Returns
     -------
     dict
-        ``{'(low, high]': {'same': [leaf ids], 'other': [leaf ids]}}``.
+        ``{distance: {'same': [leaf ids], 'other': [leaf ids]}}`` for every
+        distance from ``0`` (the leaf itself) to the largest distance in
+        ``matrix``;
+        ``same`` (``other``) lists leaves of the same (a different) class.
     """
-    bins = _metric_bins(matrix, bins_step)
-    bins[0] -= 0.0001
-    labels = ['({}, {}]'.format(bins[i], bins[i + 1])
-              for i in range(len(bins) - 1)]
-    column = matrix[:, int(np.flatnonzero(leaf_ids == leaf)[0])]
-    self_class = leaf_classes[leaf_ids == leaf][0]
-    which = np.searchsorted(bins, column, side='left') - 1
+    column, leaf_ids, leaf_classes, self_class = _leaf_column(
+        leaf, matrix, leaf_ids, leaf_classes)
     out = {}
-    for b, label in enumerate(labels):
-        in_bin = which == b
-        out[label] = {
-            'same': leaf_ids[in_bin & (leaf_classes == self_class)].tolist(),
-            'other': leaf_ids[in_bin & (leaf_classes != self_class)].tolist()}
-    if np.any((which < 0) | (which >= len(labels))):
-        logger.warning('Undiscovered group!')
+    for d in range(int(np.max(matrix)) + 1):
+        at = column == d
+        out[d] = {'same': leaf_ids[at & (leaf_classes == self_class)].tolist(),
+                  'other': leaf_ids[at & (leaf_classes != self_class)]
+                  .tolist()}
     return out
 
 
-def volatility_index(leaf, matrix, leaf_ids, leaf_classes, bins_step=0.5):
+def volatility_index(leaf, matrix, leaf_ids, leaf_classes):
     """
     Measures how close a leaf is to leaves of other classes.
 
-    The distances from the leaf to all the leaves are binned; for bin ``k``
-    (``k = 1, 2, ...``) the ratio ``(other + 1) / (same + 1)`` -- the numbers
-    of other-class and same-class leaves in the bin -- is weighted by
-    ``1 / k`` and summed.
+    For every distance ``n = 1, ..., N`` -- ``N`` being the largest distance
+    in ``matrix`` -- the numbers of leaves of another class (``other``) and
+    of the same class (``same``) at that distance from the leaf give the
+    term ``(other + 1) / (n * (same + 1))``;
+    the index is their sum.
+    Large values indicate *volatile* leaves -- close to leaves of other
+    classes -- and small values *stable* ones.
+
+    Parameters
+    ----------
+    leaf : int
+        The leaf id.
+    matrix : numpy.ndarray
+        Leaf-to-leaf distance matrix with whole-number distances.
+    leaf_ids, leaf_classes : numpy.ndarray
+        Leaf ids and classes describing the rows / columns of ``matrix``.
+
+    Returns
+    -------
+    float
     """
-    bins = _metric_bins(matrix, bins_step)
-    column = matrix[:, int(np.flatnonzero(leaf_ids == leaf)[0])]
-    self_class = leaf_classes[leaf_ids == leaf][0]
-    # pandas.cut(..., include_lowest=True) semantics
-    which = np.searchsorted(bins, column, side='left') - 1
-    which[column == bins[0]] = 0
-    same = np.zeros(len(bins) - 1)
-    other = np.zeros(len(bins) - 1)
-    for w, c in zip(which, leaf_classes):
-        if 0 <= w < len(bins) - 1:
-            if c == self_class:
-                same[w] += 1
-            else:
-                other[w] += 1
-    ratio = (other + 1) / (same + 1)
-    return float(sum(r / (k + 1) for k, r in enumerate(ratio)))
+    support = support_set_metric(leaf, matrix, leaf_ids, leaf_classes)
+    return float(sum((len(leaves['other']) + 1)
+                     / (n * (len(leaves['same']) + 1))
+                     for n, leaves in support.items() if n > 0))
 
 
 def grow_region(interval, intervals):
@@ -279,8 +286,9 @@ def _merge(per_leaf, leaves, feature):
             c = list(wannabe.pop())
             c, wannabe = grow_region(c, wannabe)
             merged.append(c)
-        wannabe = sorted(merged, key=lambda x: float(
-            x[0] if x[0] is not None else 0))
+        # unbounded-below intervals first, the others by their lower bound
+        wannabe = sorted(merged, key=lambda x: (
+            -np.inf if x[0] is None else float(x[0])))
     else:
         wannabe = _unique(wannabe)
     return {feature: {'is': current, 'wannabe': wannabe}}

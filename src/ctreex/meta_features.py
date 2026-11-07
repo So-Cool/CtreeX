@@ -286,8 +286,6 @@ def leaf_meta_features(paths, meta_features):
     for i, m in enumerate(meta_features):
         by_feature.setdefault(m.feature, []).append(i)
     kinds = {m.feature: m.kind for m in meta_features}
-    feature_of_column = {m.name: m.feature for m in meta_features
-                         if m.kind == CATEGORICAL}
     numerical_names = {m.feature for m in meta_features
                        if m.kind == NUMERICAL}
 
@@ -352,7 +350,6 @@ def leaf_meta_features(paths, meta_features):
                 if row[i] is None:
                     row[i] = fill
         rows[r] = row
-    del feature_of_column
     return LeafMetaFeatures(
         meta_features=list(meta_features),
         leaf_ids=np.asarray([p.leaf for p in paths], dtype=np.int64),

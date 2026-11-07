@@ -242,8 +242,12 @@ class TreeCounterfactualExplainer(object):
             features).
         excluded, included : collections.abc.Collection
             Base features that must not (only these may) appear in the
-            counterfactuals; a leaf is used only if all the features that
-            have to change to reach it are allowed.
+            counterfactuals;
+            a leaf is used only if all the features that have to change to
+            reach it are allowed.
+            The names have to be features of the specification
+            (``FeatureSpec.features``);
+            features the tree does not use have no effect.
         target_class : object, optional
             Explain only how to reach this class (multi-class trees); by
             default counterfactuals lead to any other class.
@@ -256,6 +260,8 @@ class TreeCounterfactualExplainer(object):
         CounterfactualExplanation
         """
         x = val.check_row(x, self.spec.n_columns)
+        excluded = val.check_features(excluded, self.spec, 'excluded')
+        included = val.check_features(included, self.spec, 'included')
         if np.isnan(x.astype(np.float64)).any():
             raise ValueError('Data points with missing values (nan) cannot be '
                              'explained; the tree can still predict them '

@@ -82,6 +82,10 @@ Counterfactuals can be restricted:
 * `excluded=['age']` -- never change these features; and
 * `included=['income']` -- change only these features.
 
+The names are those of the features of the specification
+(`FeatureSpec.features`), not their display names;
+unknown names raise an error.
+
 A leaf is used only if all the features that have to change to reach it are
 allowed, so every counterfactual at distance *d* changes exactly *d* features.
 
@@ -100,6 +104,12 @@ heat map and histograms (`ctreex.plot`) and the *volatility index* of a leaf
 -- i.e., how close it is to leaves of other classes
 (`ctreex.counterfactuals.volatility_index`) -- describe the structure of the
 tree as a whole.
+The distance between two leaves is the number of features on which they
+allow no common value (their intervals or categories do not overlap).
+For a leaf with `other` (`same`) leaves of another (the same) class at
+distance *n*, the volatility index sums `(other + 1) / (n * (same + 1))`
+over the distances *n = 1, 2, ...*;
+large values indicate leaves close to other classes.
 
 ## API
 

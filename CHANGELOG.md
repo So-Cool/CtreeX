@@ -24,6 +24,41 @@
   (without `spec` and `whole_restrictions`),
   `rank_counterfactuals` (without `deterministic_order`) and
   `describe_counterfactuals` (without `short_thresholds`).
+* **New leaf-to-leaf distance.**
+  The distance between two leaves is now the number of base features on
+  which they are incompatible, i.e., allow no common interval (category);
+  e.g., sibling leaves are at distance 1.
+  This mirrors the distance between a data point and a leaf
+  (the number of features that have to change).
+  Previously numerical features contributed the number of disagreeing
+  intervals divided by the total number of meta-features -- so distances
+  changed when unrelated features gained thresholds -- and categorical
+  features the fraction of disagreeing completions.
+  `leaf_distance_matrix` returns whole numbers (an integer array);
+  `ctreex.distances.allowed` and `ctreex.distances.incompatible` replace
+  `numerical_identity`, `numerical_distance` and `categorical_distance`.
+* **Volatility index and leaf support sets use whole-number distances.**
+  `volatility_index` is defined as the sum over the distances `n = 1, ..., N`
+  (the largest distance in the matrix) of `(other + 1) / (n * (same + 1))`,
+  where `other` (`same`) is the number of leaves of another (the same) class at
+  distance `n`;
+  previously the distances were binned (`bins_step`) and the leaf itself
+  counted towards the first bin.
+  `support_set_metric` returns `{distance: {'same': [...], 'other': [...]}}`
+  for every distance from 0 (the leaf itself) instead of interval labels and
+  both functions -- as well as `ctreex.plot.leaf_metric_histogram` -- lose
+  the `bins_step` argument;
+  the two functions no longer bin the distances differently.
+* **Merged ranges are ordered correctly.**
+  At distance 1 the merged ranges of a numerical feature are listed by
+  their lower bounds with the unbounded one (`less or equal to ...`) first;
+  previously it was sorted as if its lower bound was 0, which misplaced it when
+  the thresholds were negative.
+* **Feature restrictions are validated.**
+  `excluded` and `included` have to name features of the specification;
+  unknown names (e.g., typos or display names) raise `ValueError` and a
+  single string raises `TypeError` (previously unknown names were silently
+  ignored and a string was matched as a substring).
 
 ## 0.0.4
 

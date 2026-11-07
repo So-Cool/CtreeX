@@ -5,7 +5,7 @@ import pytest
 from ctreex import TreeCounterfactualExplainer, TreeStructure
 from ctreex.counterfactuals import (describe_range, grow_region,
                                     support_set_metric, volatility_index)
-from ctreex.distances import categorical_distance, exact_distance
+from ctreex.distances import allowed, exact_distance, incompatible
 
 
 @pytest.fixture
@@ -71,23 +71,106 @@ def test_excluded_and_included(explainer, toy_spec):
 def test_leaf_distance_matrix(explainer):
     matrix, ids, _ = explainer.leaf_distance_matrix()
     assert ids.tolist() == [2, 3, 5, 6]
-    assert matrix[0, 1] == 1      # job: one-hot vectors disagree
-    # age: 2 of the 6 meta-features disagree
-    assert matrix[0, 2] == pytest.approx(2 / 6)
-    assert np.allclose(matrix, matrix.T)
+    assert matrix.dtype.kind == 'i'
+    # leaves 2 and 3 are incompatible on the job only (job a vs b or c),
+    # leaves 2 and 5 on the age only (job is not tested by leaf 5)
+    assert matrix.tolist() == [[0, 1, 1, 1], [1, 0, 1, 1], [1, 1, 0, 1],
+                               [1, 1, 1, 0]]
 
 
 def test_volatility_and_support():
-    matrix = np.array([[0., 1, 2], [1, 0, 1], [2, 1, 0]])
+    matrix = np.array([[0, 1, 2], [1, 0, 1], [2, 1, 0]])
     ids, classes = np.array([0, 1, 2]), np.array(['a', 'a', 'b'])
-    # bins [0, .5] (.5, 1] (1, 1.5] (1.5, 2]; ratios 1/2, 1/2, 1, 2
+    # distance 1: 0 other, 1 same; distance 2: 1 other, 0 same
     assert volatility_index(0, matrix, ids, classes) == pytest.approx(
-        0.5 + 0.5 / 2 + 1 / 3 + 2 / 4)
+        (0 + 1) / (1 * (1 + 1)) + (1 + 1) / (2 * (0 + 1)))
     assert support_set_metric(0, matrix, ids, classes) == {
-        '(-0.0001, 0.5]': {'same': [0], 'other': []},
-        '(0.5, 1.0]': {'same': [1], 'other': []},
-        '(1.0, 1.5]': {'same': [], 'other': []},
-        '(1.5, 2.0]': {'same': [], 'other': [2]}}
+        0: {'same': [0], 'other': []},
+        1: {'same': [1], 'other': []},
+        2: {'same': [], 'other': [2]}}
+    with pytest.raises(ValueError):
+        volatility_index(0, matrix / 2, ids, classes)
+    with pytest.raises(KeyError):
+        support_set_metric(7, matrix, ids, classes)
+
+
+def _manual_tree():
+    """
+    A hand-crafted tree example: binary features x1, ..., x5 split at 0.5
+    (splits s1, ..., s5) and leaves l1, ..., l10 (left to right).
+    """
+    children_left, children_right, feature, value = [], [], [], []
+
+    def split(column):
+        children_left.append(None)
+        children_right.append(None)
+        feature.append(column)
+        value.append([1, 1])
+        return len(feature) - 1
+
+    def leaf(label):
+        children_left.append(-1)
+        children_right.append(-1)
+        feature.append(-2)
+        value.append([1, 0] if label == '+' else [0, 1])
+        return len(feature) - 1
+
+    def connect(node, left, right):
+        children_left[node], children_right[node] = left, right
+        return node
+
+    s3 = connect(split(2), leaf('+'), leaf('-'))                      # l1 l2
+    s4 = connect(split(3), connect(split(4), leaf('-'), leaf('+')),  # l3 l4
+                 leaf('+'))                                           # l5
+    left = connect(split(1), s3, s4)
+    s3 = connect(split(2), leaf('-'),                                 # l6
+                 connect(split(4), leaf('+'), leaf('-')))             # l7 l8
+    s4 = connect(split(3), leaf('+'), leaf('-'))                      # l9 l10
+    right = connect(split(1), s3, s4)
+    root = split(0)
+    children_left[root], children_right[root] = left, right
+    # the root has to be node 0
+    order = [root] + [i for i in range(len(feature)) if i != root]
+    new = {old: new for new, old in enumerate(order)}
+
+    def remap(children):
+        return [-1 if children[i] == -1 else new[children[i]] for i in order]
+    return TreeStructure(
+        children_left=remap(children_left),
+        children_right=remap(children_right),
+        feature=[feature[i] for i in order],
+        threshold=[0.5 if feature[i] >= 0 else -2 for i in order],
+        value=[value[i] for i in order], classes=['+', '-'],
+        feature_names=['x1', 'x2', 'x3', 'x4', 'x5'])
+
+
+def test_handcrafted_example():
+    explainer = TreeCounterfactualExplainer(_manual_tree())
+    matrix, ids, classes = explainer.leaf_distance_matrix()
+    assert ''.join(classes) == '+--++-+-+-'  # l1, ..., l10
+    # the leaf-to-leaf distances published with the tree
+    published = {  # rows and columns: l1, l4, l5, l7, l9, l2, l3, l6, l8, l10
+        1: [0, 1, 1, 2, 2, 1, 1, 1, 2, 2],
+        4: [1, 0, 1, 3, 1, 1, 1, 2, 2, 2],
+        5: [1, 1, 0, 2, 2, 1, 1, 2, 2, 1],
+        7: [2, 3, 2, 0, 1, 1, 2, 1, 1, 1],
+        9: [2, 1, 2, 1, 0, 2, 1, 1, 1, 1],
+        2: [1, 1, 1, 1, 2, 0, 1, 2, 1, 2],
+        3: [1, 1, 1, 2, 1, 1, 0, 2, 3, 2],
+        6: [1, 2, 2, 1, 1, 2, 2, 0, 1, 1],
+        8: [2, 2, 2, 1, 1, 1, 3, 1, 0, 1],
+        10: [2, 2, 1, 1, 1, 2, 2, 1, 1, 0]}
+    order = list(published)
+    leaves = {n: ids[n - 1] for n in order}  # l1, ..., l10 in DFS order
+    position = {leaf: i for i, leaf in enumerate(ids.tolist())}
+    for n in order:
+        assert [matrix[position[leaves[n]], position[leaves[m]]]
+                for m in order] == published[n]
+    # the published volatility indices of l3 and l8
+    assert volatility_index(leaves[3], matrix, ids, classes) == \
+        pytest.approx(3)
+    assert volatility_index(leaves[8], matrix, ids, classes) == \
+        pytest.approx(35 / 12)  # 2.9 in the hand-crafted tree
 
 
 def test_building_blocks():
@@ -96,9 +179,13 @@ def test_building_blocks():
     assert exact_distance(np.array([1, 0]), np.array([-1, -1])) == 1
     with pytest.raises(ValueError):
         exact_distance(np.array([1, 0]), np.array([1, 1]))
-    assert categorical_distance(np.array([1, -1, -1]),
-                                np.array([-1, 0, 0])) == 1
-    assert categorical_distance(np.array([0, 0]), np.array([1, -1])) == 0
+    assert allowed(np.array([0, -1, 0])).tolist() == [True, False, True]
+    assert allowed(np.array([0, 0, 0])).tolist() == [True, True, True]
+    assert allowed(np.array([-1, 1, -1])).tolist() == [False, True, False]
+    assert incompatible(np.array([1, -1, -1]), np.array([-1, 0, 0])) == 1
+    assert incompatible(np.array([-1, 0, 0]), np.array([0, -1, 0])) == 0
+    assert incompatible(np.array([0, 0]), np.array([1, -1])) == 0
+    assert incompatible(np.array([1, -1, -1]), np.array([-1, 1, 1])) == 1
     assert grow_region(['1', '2'], [('2', '3'), ('0', '1')]) == \
         (['0', '3'], [])
     assert describe_range([None, '5']) == 'less or equal to 5'
