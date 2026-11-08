@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0
 
 * **The legacy implementation is removed.**
   The explainer has a single behaviour -- the one previously selected with
@@ -137,6 +137,12 @@
   the explainer now detects one-hot columns split at thresholds outside of
   `[0, 1)` and explains the likely cause (previously the error was, e.g.,
   "One-hot error: too many 1s for feature 'petal'.").
+* **Notebooks.**
+  The notebooks no longer use the legacy implementation and `03_api_tour.ipynb`
+  demonstrates several target classes, `ClassProbability`, the
+  `TargetContext` and a custom target, and regression trees
+  (the regression targets, `ranked(with_values=True)`, leaf comparisons with
+  a tolerance and JSON storage) on the diabetes data shipped with scikit-learn.
 
 ## 0.0.4
 
