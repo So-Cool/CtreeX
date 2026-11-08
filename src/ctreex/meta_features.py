@@ -36,7 +36,7 @@ import itertools
 import numpy as np
 
 from ctreex.features import CATEGORICAL, NUMERICAL
-from ctreex.tree import TREE_LEAF
+from ctreex.tree import REGRESSION, TREE_LEAF
 
 __all__ = ['MetaFeature', 'Path', 'LeafMetaFeatures', 'tree_paths',
            'path_splits', 'build_meta_features', 'leaf_meta_features',
@@ -94,10 +94,14 @@ class Path(object):
     ``conditions`` hold ``(column name, operator, value)`` triples, where the
     operator is ``'='`` for one-hot columns (value ``0`` -- left branch -- or
     ``1``) and ``'<='``/``'>'`` (value: the threshold) for numerical columns.
+    ``leaf_class`` is the class of the leaf (classification trees) and
+    ``leaf_value`` its prediction (regression trees);
+    the other one is ``None``.
     """
     conditions: list
     leaf: int
     leaf_class: object
+    leaf_value: float = None
 
 
 @dataclasses.dataclass
@@ -110,20 +114,24 @@ class LeafMetaFeatures(object):
     meta_features : list of MetaFeature
     leaf_ids : numpy.ndarray
         Leaf ids in the order of a depth-first (left-first) traversal.
-    leaf_classes : numpy.ndarray
-        The (majority) class of every leaf.
+    leaf_classes : numpy.ndarray or None
+        The (majority) class of every leaf (``None`` for regression trees).
     matrix : numpy.ndarray
         ``int8`` array of shape ``(n_leaves, n_meta_features)`` with values
         ``-1``, ``0`` and ``1``.
     groups : list of tuple
         ``(kind, feature, meta-feature indices)`` triples -- i.e., the
         meta-features of every base feature -- sorted by ``(kind, feature)``.
+    leaf_values : numpy.ndarray or None
+        The prediction of every leaf (regression trees; ``None`` for
+        classification trees).
     """
     meta_features: list
     leaf_ids: np.ndarray
     leaf_classes: np.ndarray
     matrix: np.ndarray
     groups: list
+    leaf_values: np.ndarray = None
 
     @property
     def names(self):
@@ -154,6 +162,13 @@ def tree_paths(tree, spec, class_names=None):
     Returns
     -------
     list of Path
+
+    Raises
+    ------
+    ValueError
+        A column described as a category (one-hot column) is split at a
+        threshold outside of ``[0, 1)``, i.e., it holds numbers other than
+        ``0`` and ``1``.
     """
     if tree.n_features != spec.n_columns:
         raise ValueError('The tree uses {} columns but the feature '
@@ -164,6 +179,10 @@ def tree_paths(tree, spec, class_names=None):
     while stack:
         node, conditions = stack.pop()
         if tree.children_left[node] == TREE_LEAF:
+            if tree.task == REGRESSION:
+                paths.append(Path(conditions, int(node), None,
+                                  leaf_value=tree.leaf_value(node)))
+                continue
             label = tree.leaf_class(node)
             if class_names is not None:
                 label = class_names[label.item() if hasattr(label, 'item') else label]
@@ -171,7 +190,12 @@ def tree_paths(tree, spec, class_names=None):
             continue
         column = int(tree.feature[node])
         name = spec.column_names[column]
-        if spec.columns[column][1] is not None:  # one-hot column
+        feature, category = spec.columns[column]
+        if category is not None:  # one-hot column
+            threshold = float(tree.threshold[node])
+            if not 0 <= threshold < 1:
+                raise ValueError(_misread_one_hot(spec, feature, name,
+                                                  threshold))
             left, right = (name, '=', 0), (name, '=', 1)
         else:
             threshold = float(tree.threshold[node])
@@ -180,6 +204,23 @@ def tree_paths(tree, spec, class_names=None):
         stack.append((int(tree.children_right[node]), conditions + [right]))
         stack.append((int(tree.children_left[node]), conditions + [left]))
     return paths
+
+
+def _misread_one_hot(spec, feature, column, threshold=None):
+    """Explains that numerical columns may be described as categories."""
+    if threshold is None:
+        problem = ('The tree requires several categories of the categorical '
+                   'feature {!r} at once'.format(feature))
+    else:
+        problem = ('The column {!r} is described as a category of the '
+                   'categorical feature {!r}, but the tree splits it at {}, '
+                   'so it holds numbers other than 0 and 1'.format(
+                       column, feature, threshold))
+    return ('{}. Is it numerical? FeatureSpec.from_column_names treats '
+            'column names containing the separator ({!r}) as '
+            '<feature>{}<category>; give the numerical columns with its '
+            'numerical argument or describe the columns with FeatureSpec.'
+            ''.format(problem, spec.separator, spec.separator))
 
 
 def path_splits(paths):
@@ -268,7 +309,7 @@ def _numerical_bounds(conditions):
     return lower, upper
 
 
-def leaf_meta_features(paths, meta_features):
+def leaf_meta_features(paths, meta_features, spec=None):
     """
     Describes every leaf with the meta-features.
 
@@ -276,6 +317,9 @@ def leaf_meta_features(paths, meta_features):
     ----------
     paths : list of Path
     meta_features : list of MetaFeature
+    spec : ctreex.features.FeatureSpec, optional
+        Used to explain errors caused by numerical columns described as
+        categories.
 
     Returns
     -------
@@ -336,8 +380,10 @@ def leaf_meta_features(paths, meta_features):
             if n_none == len(values):  # not used -> 0
                 fill = 0
             elif n_ones > 1:
-                raise ValueError('One-hot error: too many 1s for feature '
-                                 '{!r}.'.format(feature))
+                if spec is None:
+                    raise ValueError('One-hot error: too many 1s for '
+                                     'feature {!r}.'.format(feature))
+                raise ValueError(_misread_one_hot(spec, feature, None))
             elif n_ones == 1:  # one category selected -> all others are -1
                 fill = -1
             elif n_none == 1 and n_ones == 0:  # all but one excluded -> 1
@@ -350,11 +396,16 @@ def leaf_meta_features(paths, meta_features):
                 if row[i] is None:
                     row[i] = fill
         rows[r] = row
+    regression = bool(paths) and all(p.leaf_value is not None
+                                     for p in paths)
     return LeafMetaFeatures(
         meta_features=list(meta_features),
         leaf_ids=np.asarray([p.leaf for p in paths], dtype=np.int64),
-        leaf_classes=np.asarray([p.leaf_class for p in paths]),
-        matrix=rows, groups=_feature_groups(meta_features))
+        leaf_classes=(None if regression
+                      else np.asarray([p.leaf_class for p in paths])),
+        matrix=rows, groups=_feature_groups(meta_features),
+        leaf_values=(np.asarray([p.leaf_value for p in paths],
+                                dtype=np.float64) if regression else None))
 
 
 def instance_meta_features(x, meta_features):

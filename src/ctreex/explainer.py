@@ -28,7 +28,7 @@ from ctreex import meta_features as mf
 from ctreex import _validation as val
 from ctreex import targets as tgt
 from ctreex.features import FeatureSpec
-from ctreex.tree import load_tree
+from ctreex.tree import REGRESSION, load_tree
 
 __all__ = ['TreeCounterfactualExplainer', 'CounterfactualExplanation',
            'DistanceCounterfactuals']
@@ -57,10 +57,20 @@ class DistanceCounterfactuals(object):
     ranked : dict
         ``{rank: {feature: {'is': [...], 'wannabe': [...]}}}``.
     leaf_classes : dict
-        ``{leaf id: class}`` -- the class every leaf of ``per_leaf`` predicts.
+        ``{leaf id: class}`` -- the class every leaf of ``per_leaf`` predicts
+        (classification trees; empty for regression trees).
     ranked_classes : dict
         ``{rank: [classes]}`` -- the classes a ranked counterfactual leads to
-        (counterfactuals are merged per class, so this is a single class).
+        (counterfactuals are merged per class, so this is a single class;
+        empty for regression trees).
+    leaf_values : dict
+        ``{leaf id: value}`` -- the prediction of every leaf of ``per_leaf``
+        (regression trees; empty for classification trees).
+    ranked_values : dict
+        ``{rank: (smallest, largest)}`` -- the range of the predictions a
+        ranked counterfactual leads to
+        (counterfactuals are merged per leaf value, so the two are equal;
+        empty for classification trees).
     """
     distance: int
     per_leaf: dict
@@ -68,6 +78,8 @@ class DistanceCounterfactuals(object):
     ranked: dict
     leaf_classes: dict = dataclasses.field(default_factory=dict)
     ranked_classes: dict = dataclasses.field(default_factory=dict)
+    leaf_values: dict = dataclasses.field(default_factory=dict)
+    ranked_values: dict = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass
@@ -80,7 +92,7 @@ class CounterfactualExplanation(object):
     leaf : int
         The leaf the data point falls into.
     prediction : object
-        The predicted class.
+        The predicted class or, for regression trees, the predicted value.
     instance_values : dict
         Base feature values of the data point.
     meta_features : numpy.ndarray
@@ -96,6 +108,8 @@ class CounterfactualExplanation(object):
         The target the counterfactuals lead to, e.g.,
         ``OtherClass()`` (class-contrastive) or ``SameClass()``
         (class-equivalent).
+    task : {'classification', 'regression'}
+        The kind of the tree.
     """
     leaf: int
     prediction: object
@@ -105,6 +119,7 @@ class CounterfactualExplanation(object):
     support: dict
     counterfactuals: list
     target: tgt.Target = dataclasses.field(default_factory=tgt.OtherClass)
+    task: str = 'classification'
 
     @property
     def distances(self):
@@ -117,18 +132,38 @@ class CounterfactualExplanation(object):
                 return c
         return None
 
-    def ranked(self, with_classes=False):
+    def ranked(self, with_classes=False, with_values=False):
         """
         All ranked counterfactuals.
+
+        Parameters
+        ----------
+        with_classes : bool
+            Report the classes every counterfactual leads to
+            (classification trees).
+        with_values : bool
+            Report the range of the predictions every counterfactual leads to
+            (regression trees).
 
         Returns
         -------
         list
             ``(distance, counterfactual)`` pairs, or ``(distance, classes,
-            counterfactual)`` triples with ``with_classes``.
+            counterfactual)`` triples with ``with_classes``, or
+            ``(distance, (smallest, largest), counterfactual)`` triples with
+            ``with_values``.
         """
-        if with_classes:
-            return [(c.distance, c.ranked_classes[rank], cf)
+        if with_classes and with_values:
+            raise ValueError('Use either with_classes or with_values.')
+        if with_classes and self.task == REGRESSION:
+            raise ValueError('Regression trees have no classes; use '
+                             'with_values.')
+        if with_values and self.task != REGRESSION:
+            raise ValueError('Classification trees have no values; use '
+                             'with_classes.')
+        if with_classes or with_values:
+            attribute = 'ranked_classes' if with_classes else 'ranked_values'
+            return [(c.distance, getattr(c, attribute)[rank], cf)
                     for c in self.counterfactuals
                     for rank, cf in c.ranked.items()]
         return [(c.distance, cf) for c in self.counterfactuals
@@ -142,18 +177,21 @@ class TreeCounterfactualExplainer(object):
     Parameters
     ----------
     model : TreeStructure, scikit-learn tree, str or dict
-        The tree, i.e., anything accepted by :func:`ctreex.tree.load_tree`.
+        The tree -- a classifier or a regressor -- i.e., anything accepted by
+        :func:`ctreex.tree.load_tree`.
     feature_spec : FeatureSpec or list of str, optional
         Description of the data columns. A list of column names is converted
         with :meth:`FeatureSpec.from_column_names`; when omitted the feature
         names stored in the tree are used.
     class_names : dict or list, optional
         Names of the classes (a dictionary mapping class labels to names or a
-        list following ``model.classes``); used for predictions and leaves.
+        list following ``model.classes``); used for predictions and leaves
+        (classification trees only).
 
     Attributes
     ----------
     tree : TreeStructure
+    task : {'classification', 'regression'}
     spec : FeatureSpec
     paths : list of ctreex.meta_features.Path
     meta_features : list of ctreex.meta_features.MetaFeature
@@ -185,7 +223,10 @@ class TreeCounterfactualExplainer(object):
                           'make sure that the columns are in the same order.',
                           UserWarning)
         self.spec = feature_spec
+        self.task = self.tree.task
 
+        if class_names is not None and self.task == REGRESSION:
+            raise ValueError('Regression trees have no classes to name.')
         if class_names is not None and not isinstance(class_names, dict):
             if len(class_names) != len(self.tree.classes):
                 raise ValueError('class_names has to name every class.')
@@ -194,19 +235,29 @@ class TreeCounterfactualExplainer(object):
         self.paths = mf.tree_paths(self.tree, self.spec, class_names)
         self.splits = mf.path_splits(self.paths)
         self.meta_features = mf.build_meta_features(self.splits, self.spec)
-        self.leaf_meta_features = mf.leaf_meta_features(self.paths,
-                                                        self.meta_features)
+        self.leaf_meta_features = mf.leaf_meta_features(
+            self.paths, self.meta_features, spec=self.spec)
         self._leaf_distance_matrix = None
-        value = np.asarray(self.tree.value, dtype=np.float64)[
-            self.leaf_meta_features.leaf_ids]
-        self._leaf_probabilities = value / value.sum(axis=1, keepdims=True)
-        self._class_labels = [
-            class_names[c] if class_names is not None else c
-            for c in self.tree.classes.tolist()]
+        if self.task == REGRESSION:
+            self._leaf_probabilities = self._class_labels = None
+        else:
+            value = np.asarray(self.tree.value, dtype=np.float64)[
+                self.leaf_meta_features.leaf_ids]
+            self._leaf_probabilities = value / value.sum(axis=1,
+                                                         keepdims=True)
+            self._class_labels = [
+                class_names[c] if class_names is not None else c
+                for c in self.tree.classes.tolist()]
 
     @property
     def classes(self):
+        """The class labels (``None`` for regression trees)."""
         return self.tree.classes
+
+    def _leaf_outputs(self):
+        """The class -- or the value, for regression -- of every leaf."""
+        lmf = self.leaf_meta_features
+        return lmf.leaf_values if self.task == REGRESSION else lmf.leaf_classes
 
     def predict_leaf(self, x):
         """Leaf id of a single (one-hot encoded) data point."""
@@ -222,12 +273,58 @@ class TreeCounterfactualExplainer(object):
         matrix : numpy.ndarray
         leaf_ids : numpy.ndarray
         leaf_classes : numpy.ndarray
+            The class of every leaf -- or, for regression trees, its value
+            (pass a ``tolerance`` to the functions of
+            :mod:`ctreex.counterfactuals` and :mod:`ctreex.plot` that compare
+            them).
         """
         if self._leaf_distance_matrix is None:
             self._leaf_distance_matrix = distances.leaf_distance_matrix(
                 self.leaf_meta_features)
         lmf = self.leaf_meta_features
-        return self._leaf_distance_matrix, lmf.leaf_ids, lmf.leaf_classes
+        return self._leaf_distance_matrix, lmf.leaf_ids, self._leaf_outputs()
+
+    def _check_tolerance(self, tolerance):
+        if self.task == REGRESSION and tolerance is None:
+            raise ValueError('Regression leaves are compared with a '
+                             'tolerance: leaves whose values differ by at '
+                             'most tolerance are the same (e.g., '
+                             'tolerance=0 for equal values).')
+        if self.task != REGRESSION and tolerance is not None:
+            raise ValueError('The leaves of classification trees are '
+                             'compared by their classes (no tolerance).')
+
+    def support_set_metric(self, leaf, tolerance=None):
+        """
+        Groups leaves by their distance to a leaf (see
+        :func:`ctreex.counterfactuals.support_set_metric`).
+
+        Parameters
+        ----------
+        leaf : int
+        tolerance : float, optional
+            Regression trees (required): leaves whose values differ from the
+            value of ``leaf`` by at most ``tolerance`` are the same.
+        """
+        self._check_tolerance(tolerance)
+        return cfs.support_set_metric(leaf, *self.leaf_distance_matrix(),
+                                      tolerance=tolerance)
+
+    def volatility_index(self, leaf, tolerance=None):
+        """
+        The volatility index of a leaf (see
+        :func:`ctreex.counterfactuals.volatility_index`).
+
+        Parameters
+        ----------
+        leaf : int
+        tolerance : float, optional
+            Regression trees (required): leaves whose values differ from the
+            value of ``leaf`` by at most ``tolerance`` are the same.
+        """
+        self._check_tolerance(tolerance)
+        return cfs.volatility_index(leaf, *self.leaf_distance_matrix(),
+                                    tolerance=tolerance)
 
     def target_context(self, leaf):
         """
@@ -244,10 +341,12 @@ class TreeCounterfactualExplainer(object):
         """
         lmf = self.leaf_meta_features
         return tgt.TargetContext(
-            prediction=lmf.leaf_classes[lmf.leaf_index(leaf)], leaf=leaf,
-            leaf_ids=lmf.leaf_ids, leaf_classes=lmf.leaf_classes,
+            prediction=_python(self._leaf_outputs()[lmf.leaf_index(leaf)]),
+            leaf=leaf, leaf_ids=lmf.leaf_ids, leaf_classes=lmf.leaf_classes,
             leaf_probabilities=self._leaf_probabilities,
-            classes=list(self._class_labels))
+            classes=(None if self._class_labels is None
+                     else list(self._class_labels)),
+            task=self.task, leaf_values=lmf.leaf_values)
 
     def explain_instance(self, x, instance_values=None, max_distance=None,
                          excluded=(), included=(), target=None):
@@ -258,10 +357,13 @@ class TreeCounterfactualExplainer(object):
         closest *target* leaves (see :mod:`ctreex.targets`).
         By default (``OtherClass()``) these are *class-contrastive*
         counterfactuals -- changes that lead to a different prediction;
-        ``TargetClass(label)`` leads to one class (multi-class trees);
+        ``TargetClass(label, ...)`` leads to given classes (multi-class
+        trees);
         ``SameClass()`` yields *class-equivalent* explanations -- changes
         that move the data point to another leaf of the same class, i.e.,
         that keep the prediction.
+        Regression trees need a target, e.g., ``ValueChange(+100)`` -- the
+        changes that increase the prediction by at least 100.
 
         Parameters
         ----------
@@ -283,7 +385,7 @@ class TreeCounterfactualExplainer(object):
             features the tree does not use have no effect.
         target : ctreex.targets.Target, optional
             Selects the leaves the counterfactuals lead to
-            (default: ``OtherClass()``).
+            (default: ``OtherClass()``; required for regression trees).
 
         Returns
         -------
@@ -299,6 +401,9 @@ class TreeCounterfactualExplainer(object):
         if instance_values is None:
             instance_values = self.spec.decode(x)
         if target is None:
+            if self.task == REGRESSION:
+                raise ValueError('Regression trees need a target, e.g., '
+                                 'ValueChange(+100) or ValueAtMost(50).')
             target = tgt.OtherClass()
         lmf = self.leaf_meta_features
         leaf = self.predict_leaf(x)
@@ -320,22 +425,29 @@ class TreeCounterfactualExplainer(object):
                     distance=distance, excluded=excluded, included=included)
             except cfs.MissingDistance:  # no leaf this far from the point
                 continue
-            leaf_classes = {leaf: _python(lmf.leaf_classes[lmf.leaf_index(
+            outputs = {leaf: _python(self._leaf_outputs()[lmf.leaf_index(
                 leaf)]) for leaf in per_leaf}
+            # merged and scored per class (per value for regression trees)
             ranked, sources = cfs.rank_counterfactuals(
-                per_leaf, per_feature, distance, leaf_classes=leaf_classes,
+                per_leaf, per_feature, distance, leaf_classes=outputs,
                 return_sources=True)
-            ranked_classes = {
-                rank: list(dict.fromkeys(leaf_classes[leaf]
-                                         for leaf in leaves))
-                for rank, leaves in sources.items()}
+            if self.task == REGRESSION:
+                reported = {'leaf_values': outputs, 'ranked_values': {
+                    rank: (min(outputs[leaf] for leaf in leaves),
+                           max(outputs[leaf] for leaf in leaves))
+                    for rank, leaves in sources.items()}}
+            else:
+                reported = {'leaf_classes': outputs, 'ranked_classes': {
+                    rank: list(dict.fromkeys(outputs[leaf]
+                                             for leaf in leaves))
+                    for rank, leaves in sources.items()}}
             found.append(DistanceCounterfactuals(
-                distance, per_leaf, per_feature, ranked,
-                leaf_classes=leaf_classes, ranked_classes=ranked_classes))
+                distance, per_leaf, per_feature, ranked, **reported))
         return CounterfactualExplanation(
             leaf=leaf, prediction=prediction, instance_values=instance_values,
             meta_features=instance, leaf_distances=leaf_distances,
-            support=support, counterfactuals=found, target=target)
+            support=support, counterfactuals=found, target=target,
+            task=self.task)
 
     def describe(self, counterfactuals, integer_ranges=False):
         """

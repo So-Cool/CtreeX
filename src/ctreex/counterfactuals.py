@@ -34,7 +34,8 @@ import numpy as np
 from ctreex.distances import similarity
 from ctreex.features import NUMERICAL
 
-__all__ = ['support_set', 'support_set_metric', 'volatility_index',
+__all__ = ['support_set', 'same_leaves', 'support_set_metric',
+           'volatility_index',
            'grow_region', 'extract_counterfactuals', 'rank_counterfactuals',
            'describe_counterfactuals', 'describe_range',
            'describe_integer_range', 'format_bound', 'MissingDistance']
@@ -89,6 +90,35 @@ def support_set(distances, leaf_ids, targets):
     return out
 
 
+def same_leaves(reference, leaf_classes, tolerance=None):
+    """
+    Which leaves are the same as a reference leaf.
+
+    Parameters
+    ----------
+    reference : object
+        The class (or value) of the reference leaf.
+    leaf_classes : numpy.ndarray
+        The classes of the leaves -- or, for regression trees, their values.
+    tolerance : float, optional
+        Compare values: leaves whose values differ from ``reference`` by at
+        most ``tolerance`` are the same.
+        Without it the leaves of the same class are the same.
+
+    Returns
+    -------
+    numpy.ndarray
+        Boolean mask over the leaves.
+    """
+    leaf_classes = np.asarray(leaf_classes)
+    if tolerance is None:
+        return leaf_classes == reference
+    if tolerance < 0:
+        raise ValueError('tolerance cannot be negative.')
+    return np.abs(leaf_classes.astype(np.float64) - float(reference)) \
+        <= tolerance
+
+
 def _leaf_column(leaf, matrix, leaf_ids, leaf_classes):
     """Distances from a leaf to all the leaves and the class of the leaf."""
     leaf_ids, leaf_classes = np.asarray(leaf_ids), np.asarray(leaf_classes)
@@ -102,7 +132,8 @@ def _leaf_column(leaf, matrix, leaf_ids, leaf_classes):
             leaf_classes[int(position[0])])
 
 
-def support_set_metric(leaf, matrix, leaf_ids, leaf_classes):
+def support_set_metric(leaf, matrix, leaf_ids, leaf_classes,
+                       tolerance=None):
     """
     Groups leaves by their distance to a given leaf.
 
@@ -115,7 +146,12 @@ def support_set_metric(leaf, matrix, leaf_ids, leaf_classes):
         :func:`ctreex.distances.leaf_distance_matrix`);
         the distances are whole numbers.
     leaf_ids, leaf_classes : numpy.ndarray
-        Leaf ids and classes describing the rows/columns of ``matrix``.
+        Leaf ids and classes (values for regression trees) describing the
+        rows / columns of ``matrix``.
+    tolerance : float, optional
+        Regression trees: leaves whose values differ from the value of
+        ``leaf`` by at most ``tolerance`` are the same
+        (see :func:`same_leaves`).
 
     Returns
     -------
@@ -127,16 +163,16 @@ def support_set_metric(leaf, matrix, leaf_ids, leaf_classes):
     """
     column, leaf_ids, leaf_classes, self_class = _leaf_column(
         leaf, matrix, leaf_ids, leaf_classes)
+    same = same_leaves(self_class, leaf_classes, tolerance=tolerance)
     out = {}
     for d in range(int(np.max(matrix)) + 1):
         at = column == d
-        out[d] = {'same': leaf_ids[at & (leaf_classes == self_class)].tolist(),
-                  'other': leaf_ids[at & (leaf_classes != self_class)]
-                  .tolist()}
+        out[d] = {'same': leaf_ids[at & same].tolist(),
+                  'other': leaf_ids[at & ~same].tolist()}
     return out
 
 
-def volatility_index(leaf, matrix, leaf_ids, leaf_classes):
+def volatility_index(leaf, matrix, leaf_ids, leaf_classes, tolerance=None):
     """
     Measures how close a leaf is to leaves of other classes.
 
@@ -155,13 +191,19 @@ def volatility_index(leaf, matrix, leaf_ids, leaf_classes):
     matrix : numpy.ndarray
         Leaf-to-leaf distance matrix with whole-number distances.
     leaf_ids, leaf_classes : numpy.ndarray
-        Leaf ids and classes describing the rows / columns of ``matrix``.
+        Leaf ids and classes (values for regression trees) describing the
+        rows / columns of ``matrix``.
+    tolerance : float, optional
+        Regression trees: leaves whose values differ from the value of
+        ``leaf`` by at most ``tolerance`` are the same
+        (see :func:`same_leaves`).
 
     Returns
     -------
     float
     """
-    support = support_set_metric(leaf, matrix, leaf_ids, leaf_classes)
+    support = support_set_metric(leaf, matrix, leaf_ids, leaf_classes,
+                                 tolerance=tolerance)
     return float(sum((len(leaves['other']) + 1)
                      / (n * (len(leaves['same']) + 1))
                      for n, leaves in support.items() if n > 0))
@@ -314,10 +356,11 @@ def rank_counterfactuals(per_leaf, per_feature, distance, leaf_classes=None,
     Parameters
     ----------
     leaf_classes : dict, optional
-        ``{leaf id: class}``. Counterfactuals are merged and scored per
-        class: at distance 1 the leaves of different classes are not merged,
-        and features are scored by the leaves of the same class. Without it
-        all leaves are treated as one class.
+        ``{leaf id: class}`` (or ``{leaf id: value}`` for regression trees).
+        Counterfactuals are merged and scored per class (value):
+        at distance 1 the leaves of different classes are not merged,
+        and features are scored by the leaves of the same class.
+        Without it all leaves are treated as one class.
     return_sources : bool
         Also return the leaves every ranked counterfactual comes from.
 

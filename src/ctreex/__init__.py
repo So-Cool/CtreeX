@@ -1,9 +1,9 @@
 """
 CtreeX: Counterfactual decision tree explainer.
 
-The explainer turns the root-to-leaf paths of a decision tree into boolean
-meta-features and finds the leaves of another class that are closest to a data
-point.
+The explainer turns the root-to-leaf paths of a decision tree (a classifier
+or a regressor) into boolean meta-features and finds the leaves -- e.g., of
+another class -- that are closest to a data point.
 It depends only on numpy.
 
 >>> from ctreex import TreeCounterfactualExplainer
@@ -14,12 +14,16 @@ from ctreex.explainer import (CounterfactualExplanation,
                               DistanceCounterfactuals,
                               TreeCounterfactualExplainer)
 from ctreex.features import Feature, FeatureSpec
-from ctreex.targets import OtherClass, SameClass, Target, TargetClass
+from ctreex.targets import (ClassProbability, OtherClass, SameClass, Target,
+                            TargetClass, ValueAtLeast, ValueAtMost,
+                            ValueChange, ValueWithin)
 from ctreex.tree import TreeStructure, load_tree
 
 __all__ = ['TreeCounterfactualExplainer', 'CounterfactualExplanation',
            'DistanceCounterfactuals', 'Feature', 'FeatureSpec',
            'Target', 'OtherClass', 'TargetClass', 'SameClass',
+           'ClassProbability', 'ValueChange', 'ValueAtLeast', 'ValueAtMost',
+           'ValueWithin',
            'TreeStructure', 'load_tree']
 
 try:

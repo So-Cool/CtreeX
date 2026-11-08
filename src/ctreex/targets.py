@@ -3,14 +3,28 @@ Targets: which leaves the explanations of a data point lead to.
 
 The explainer finds the leaves closest to a data point among the *target*
 leaves and turns their conditions into explanations.
-A target selects these leaves:
+A target selects these leaves.
+Classification trees:
 
 * :class:`OtherClass` (the default) -- leaves of any class other than the
   prediction, i.e., *class-contrastive* counterfactuals;
-* :class:`TargetClass` -- leaves of one given class (multi-class trees); and
+* :class:`TargetClass` -- leaves of one or more given classes (multi-class
+  trees);
 * :class:`SameClass` -- other leaves of the predicted class, i.e.,
   *class-equivalent* explanations:
-  the changes that keep the prediction.
+  the changes that keep the prediction; and
+* :class:`ClassProbability` -- leaves of given classes whose majority is at
+  least a given proportion (confident leaves).
+
+Regression trees (a target has to be given):
+
+* :class:`ValueChange` -- leaves whose prediction is larger (smaller) than
+  the prediction of the data point by at least a given amount;
+* :class:`ValueAtLeast` and :class:`ValueAtMost` -- leaves whose prediction
+  is at least (at most) a given value; and
+* :class:`ValueWithin` -- leaves whose prediction differs from the prediction
+  of the data point by at most a given tolerance, i.e., the changes that
+  (approximately) keep the prediction.
 
 Custom targets subclass :class:`Target` and implement :meth:`Target.select`,
 which receives a :class:`TargetContext` describing the prediction and all
@@ -27,11 +41,19 @@ e.g., the leaves of the predicted class whose majority is at least 90%::
 The leaf of the data point itself is never used (it is at distance ``0``).
 """
 import dataclasses
+import math
 
 import numpy as np
 
+from ctreex.tree import CLASSIFICATION, REGRESSION
+
 __all__ = ['TargetContext', 'Target', 'OtherClass', 'TargetClass',
-           'SameClass', 'select_targets']
+           'SameClass', 'ClassProbability', 'ValueChange', 'ValueAtLeast',
+           'ValueAtMost', 'ValueWithin', 'select_targets']
+
+_CLASSIFICATION_TARGETS = 'OtherClass, TargetClass, SameClass or ' \
+    'ClassProbability'
+_REGRESSION_TARGETS = 'ValueChange, ValueAtLeast, ValueAtMost or ValueWithin'
 
 
 @dataclasses.dataclass(frozen=True)
@@ -39,21 +61,29 @@ class TargetContext(object):
     """
     The prediction of a data point and the leaves of the tree.
 
+    The class attributes are ``None`` for regression trees and
+    ``leaf_values`` is ``None`` for classification trees.
+
     Attributes
     ----------
     prediction : object
-        The predicted class (its name when the explainer has class names).
+        The predicted class (its name when the explainer has class names)
+        or, for regression trees, the predicted value.
     leaf : int
         The leaf the data point falls into.
     leaf_ids : numpy.ndarray
         All the leaf ids
         (in the order of ``TreeCounterfactualExplainer.leaf_meta_features``).
-    leaf_classes : numpy.ndarray
+    leaf_classes : numpy.ndarray or None
         The (majority) class of every leaf.
-    leaf_probabilities : numpy.ndarray
+    leaf_probabilities : numpy.ndarray or None
         ``(n_leaves, n_classes)`` class proportions of every leaf.
-    classes : list
+    classes : list or None
         The classes of the columns of ``leaf_probabilities``.
+    task : {'classification', 'regression'}
+        The kind of the tree.
+    leaf_values : numpy.ndarray or None
+        The prediction of every leaf (regression trees).
     """
     prediction: object
     leaf: int
@@ -61,6 +91,41 @@ class TargetContext(object):
     leaf_classes: np.ndarray
     leaf_probabilities: np.ndarray
     classes: list
+    task: str = CLASSIFICATION
+    leaf_values: np.ndarray = None
+
+
+def _require(target, context, task):
+    """Checks that a target is used with its kind of tree."""
+    if context.task != task:
+        alternatives = (_REGRESSION_TARGETS if context.task == REGRESSION
+                        else _CLASSIFICATION_TARGETS)
+        raise ValueError('{!r} is a target of {} trees; {} trees use {}.'
+                         ''.format(target, task, context.task, alternatives))
+
+
+def _check_labels(target, labels, context):
+    """Checks that some leaf predicts every class."""
+    known = set(context.leaf_classes.tolist())
+    unknown = [label for label in labels if label not in known]
+    if unknown:
+        raise ValueError('Unknown classes of {!r} (no leaf predicts them): '
+                         '{}.'.format(target, ', '.join(map(repr, unknown))))
+
+
+def _labels(name, labels):
+    if not labels:
+        raise TypeError('{} needs at least one class.'.format(name))
+    return tuple(dict.fromkeys(labels))
+
+
+def _number(name, value):
+    if isinstance(value, bool) or not isinstance(value, (int, float,
+                                                         np.number)) \
+            or not math.isfinite(value):
+        raise ValueError('{} has to be a finite number; got {!r}.'.format(
+            name, value))
+    return value
 
 
 class Target(object):
@@ -102,42 +167,195 @@ class Target(object):
 class OtherClass(Target):
     """Leaves of any class other than the prediction (class-contrastive)."""
 
+    def validate(self, context):
+        _require(self, context, CLASSIFICATION)
+
     def select(self, context):
         return context.leaf_classes != context.prediction
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, init=False)
 class TargetClass(Target):
     """
-    Leaves of a given class, which differs from the prediction.
+    Leaves of one or more given classes, which differ from the prediction.
+
+    ``TargetClass('a')`` leads to class ``a`` and ``TargetClass('a', 'b')``
+    to class ``a`` or ``b``.
 
     Attributes
     ----------
-    label : object
-        The class (its name when the explainer has class names).
+    labels : tuple
+        The classes (their names when the explainer has class names).
     """
-    label: object
+    labels: tuple
+
+    def __init__(self, *labels):
+        object.__setattr__(self, 'labels', _labels('TargetClass', labels))
 
     def validate(self, context):
-        if self.label not in set(context.leaf_classes.tolist()):
-            raise ValueError('Unknown target class (no leaf predicts it): '
-                             '{!r}.'.format(self.label))
-        if self.label == context.prediction:
-            raise ValueError('The target class has to differ from the '
+        _require(self, context, CLASSIFICATION)
+        _check_labels(self, self.labels, context)
+        if context.prediction in self.labels:
+            raise ValueError('The target classes have to differ from the '
                              'prediction ({!r}); use SameClass() for '
                              'class-equivalent explanations.'.format(
                                  context.prediction))
 
     def select(self, context):
-        return context.leaf_classes == self.label
+        return np.isin(context.leaf_classes, self.labels)
 
 
 @dataclasses.dataclass(frozen=True)
 class SameClass(Target):
     """Other leaves of the predicted class (class-equivalent)."""
 
+    def validate(self, context):
+        _require(self, context, CLASSIFICATION)
+
     def select(self, context):
         return context.leaf_classes == context.prediction
+
+
+@dataclasses.dataclass(frozen=True, init=False)
+class ClassProbability(Target):
+    """
+    Leaves of given classes whose majority is at least a given proportion.
+
+    A leaf is a target when it predicts one of the classes and the proportion
+    of that class in the leaf is at least ``at_least``;
+    e.g., ``ClassProbability('good', at_least=0.8)`` leads to leaves that
+    predict ``good`` with at least 80% of their training data.
+    The classes may include the prediction (e.g., to explain how to be
+    classified the same way with more confidence).
+
+    Attributes
+    ----------
+    labels : tuple
+        The classes (their names when the explainer has class names).
+    at_least : float
+        The smallest proportion of the class in a target leaf
+        (between 0 and 1).
+    """
+    labels: tuple
+    at_least: float
+
+    def __init__(self, *labels, at_least):
+        at_least = _number('at_least', at_least)
+        if not 0 <= at_least <= 1:
+            raise ValueError('at_least has to be between 0 and 1; got '
+                             '{!r}.'.format(at_least))
+        object.__setattr__(self, 'labels', _labels('ClassProbability',
+                                                   labels))
+        object.__setattr__(self, 'at_least', at_least)
+
+    def validate(self, context):
+        _require(self, context, CLASSIFICATION)
+        _check_labels(self, self.labels, context)
+
+    def select(self, context):
+        # the class of a leaf is its majority class
+        confident = context.leaf_probabilities.max(axis=1) >= self.at_least
+        return np.isin(context.leaf_classes, self.labels) & confident
+
+
+@dataclasses.dataclass(frozen=True)
+class ValueChange(Target):
+    """
+    Leaves whose prediction differs from the prediction by at least ``delta``.
+
+    For a positive ``delta`` the target leaves predict at least
+    ``prediction + delta`` and for a negative one at most
+    ``prediction + delta``;
+    e.g., ``ValueChange(+100)`` leads to leaves predicting at least 100 more.
+
+    Attributes
+    ----------
+    delta : float
+        The smallest change of the prediction (non-zero).
+    """
+    delta: float
+
+    def __post_init__(self):
+        if _number('delta', self.delta) == 0:
+            raise ValueError('delta has to be positive or negative; use '
+                             'ValueWithin for the changes that keep the '
+                             'prediction.')
+
+    def validate(self, context):
+        _require(self, context, REGRESSION)
+
+    def select(self, context):
+        bound = context.prediction + self.delta
+        if self.delta > 0:
+            return context.leaf_values >= bound
+        return context.leaf_values <= bound
+
+
+@dataclasses.dataclass(frozen=True)
+class ValueAtLeast(Target):
+    """
+    Leaves predicting at least ``value``.
+
+    Attributes
+    ----------
+    value : float
+    """
+    value: float
+
+    def __post_init__(self):
+        _number('value', self.value)
+
+    def validate(self, context):
+        _require(self, context, REGRESSION)
+
+    def select(self, context):
+        return context.leaf_values >= self.value
+
+
+@dataclasses.dataclass(frozen=True)
+class ValueAtMost(Target):
+    """
+    Leaves predicting at most ``value``.
+
+    Attributes
+    ----------
+    value : float
+    """
+    value: float
+
+    def __post_init__(self):
+        _number('value', self.value)
+
+    def validate(self, context):
+        _require(self, context, REGRESSION)
+
+    def select(self, context):
+        return context.leaf_values <= self.value
+
+
+@dataclasses.dataclass(frozen=True)
+class ValueWithin(Target):
+    """
+    Leaves whose prediction differs from the prediction by at most
+    ``tolerance``, i.e., the changes that (approximately) keep the prediction.
+
+    Attributes
+    ----------
+    tolerance : float
+        The largest change of the prediction (non-negative).
+    """
+    tolerance: float
+
+    def __post_init__(self):
+        if _number('tolerance', self.tolerance) < 0:
+            raise ValueError('tolerance cannot be negative.')
+
+    def validate(self, context):
+        _require(self, context, REGRESSION)
+
+    def select(self, context):
+        return np.abs(context.leaf_values - context.prediction) \
+            <= self.tolerance
 
 
 def select_targets(target, context):
@@ -156,8 +374,8 @@ def select_targets(target, context):
     """
     if not isinstance(target, Target):
         raise TypeError('target has to be a ctreex.targets.Target (e.g., '
-                        'OtherClass(), TargetClass(...) or SameClass()); '
-                        'got {!r}.'.format(target))
+                        'OtherClass(), TargetClass(...), SameClass() or '
+                        'ValueChange(...)); got {!r}.'.format(target))
     target.validate(context)
     mask = np.asarray(target.select(context))
     if mask.dtype != bool or mask.shape != context.leaf_ids.shape:

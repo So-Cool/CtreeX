@@ -1,11 +1,13 @@
 """
-A library-independent representation of a fitted decision tree classifier.
+A library-independent representation of a fitted decision tree.
 
 :class:`TreeStructure` stores the arrays of a binary decision tree (the same
-layout as ``sklearn.tree.DecisionTreeClassifier.tree_``) and can be built
-from a scikit-learn model, saved to and loaded from JSON. Storing trees as JSON
-makes them independent of the scikit-learn version (pickled scikit-learn
-models can only be loaded by the version that created them).
+layout as ``sklearn.tree.DecisionTreeClassifier.tree_`` and
+``sklearn.tree.DecisionTreeRegressor.tree_``) and can be built from a
+scikit-learn model, saved to and loaded from JSON.
+Storing trees as JSON makes them independent of the scikit-learn version
+(pickled scikit-learn models can only be loaded by the version that created
+them).
 """
 import json
 import os
@@ -19,12 +21,15 @@ __all__ = ['TreeStructure', 'load_tree', 'TREE_LEAF', 'TREE_UNDEFINED']
 TREE_LEAF = -1          #: child id of leaves (as in scikit-learn)
 TREE_UNDEFINED = -2     #: feature id of leaves (as in scikit-learn)
 JSON_FORMAT = 'ctreex-tree'
-JSON_FORMAT_VERSION = 1
+JSON_FORMAT_VERSION = 2
+CLASSIFICATION = 'classification'
+REGRESSION = 'regression'
+TASKS = (CLASSIFICATION, REGRESSION)
 
 
 class TreeStructure(object):
     """
-    A fitted binary decision tree classifier.
+    A fitted binary decision tree -- a classifier or a regressor.
 
     A data point goes to the left child of a split node when
     ``x[feature] <= threshold`` and to the right child otherwise.
@@ -37,12 +42,15 @@ class TreeStructure(object):
         Column used by a split node (``-2`` for leaves).
     threshold : array-like of float
         Split thresholds.
-    value : array-like of float, shape (n_nodes, n_classes)
-        (Weighted) class counts -- or, for trees built with scikit-learn 1.4
-        or newer, class proportions -- of the training data in every node.
-        Only their relative sizes are used (predictions and probabilities).
-    classes : array-like
-        Class labels (in the order of ``value`` columns).
+    value : array-like of float, shape (n_nodes, n_classes) or (n_nodes, 1)
+        Classifiers: (weighted) class counts -- or, for trees built with
+        scikit-learn 1.4 or newer, class proportions -- of the training data
+        in every node;
+        only their relative sizes are used (predictions and probabilities).
+        Regressors: the prediction of every node (a single column).
+    classes : array-like, optional
+        Class labels (in the order of ``value`` columns);
+        ``None`` for regression trees.
     n_features : int, optional
         Number of columns of the data (inferred when not given).
     feature_names : list of str, optional
@@ -54,11 +62,11 @@ class TreeStructure(object):
         scikit-learn 1.3 or newer. When not given, missing values go to the
         right child (as with scikit-learn trees trained without them).
 
-    Only classifiers are supported (regression trees have no classes).
+    Multi-output trees are not supported.
     """
 
     def __init__(self, children_left, children_right, feature, threshold,
-                 value, classes, n_features=None, feature_names=None,
+                 value, classes=None, n_features=None, feature_names=None,
                  metadata=None, missing_go_to_left=None):
         self.children_left = np.asarray(children_left, dtype=np.int64)
         self.children_right = np.asarray(children_right, dtype=np.int64)
@@ -69,8 +77,11 @@ class TreeStructure(object):
             if value.shape[1] != 1:
                 raise ValueError('Multi-output trees are not supported.')
             value = value[:, 0, :]
+        if value.ndim != 2:
+            raise ValueError('value has to be a (n_nodes, n_classes) or '
+                             '(n_nodes, 1) array.')
         self.value = value
-        self.classes = np.asarray(classes)
+        self.classes = None if classes is None else np.asarray(classes)
         self.missing_go_to_left = (
             None if missing_go_to_left is None
             else np.asarray(missing_go_to_left, dtype=bool))
@@ -83,7 +94,12 @@ class TreeStructure(object):
             if getattr(self, name).shape[0] != n_nodes:
                 raise ValueError('All the tree arrays have to describe {} '
                                  'nodes ({} differs).'.format(n_nodes, name))
-        if self.value.shape[1] != self.classes.shape[0]:
+        if self.classes is None:
+            if self.value.shape[1] != 1:
+                raise ValueError('Regression trees (without classes) have a '
+                                 'single value per node; for classifiers, '
+                                 'give the classes.')
+        elif self.value.shape[1] != self.classes.shape[0]:
             raise ValueError('The number of classes does not match the shape '
                              'of the value array.')
         is_leaf = self.children_left == TREE_LEAF
@@ -106,15 +122,19 @@ class TreeStructure(object):
         """
         Builds the structure from a fitted scikit-learn decision tree.
 
+        Classifiers and regressors (e.g., ``DecisionTreeClassifier`` and
+        ``DecisionTreeRegressor``) are supported.
         Objects exposing the tree as a ``model`` attribute (e.g. an
         ``mlaas.model_trainer.Trainer``) are accepted as well.
         """
         if hasattr(clf, 'model') and not hasattr(clf, 'tree_'):
             clf = clf.model
-        if not hasattr(clf, 'tree_') or not hasattr(clf, 'classes_'):
+        if not hasattr(clf, 'tree_'):
             raise TypeError('Expected a fitted scikit-learn decision tree '
-                            'classifier.')
+                            '(classifier or regressor).')
         tree = clf.tree_
+        if getattr(tree, 'n_outputs', 1) != 1:
+            raise ValueError('Multi-output trees are not supported.')
         if feature_names is None and hasattr(clf, 'feature_names_in_'):
             feature_names = list(clf.feature_names_in_)
         meta = {'source': 'scikit-learn',
@@ -122,7 +142,7 @@ class TreeStructure(object):
                            if isinstance(v, (int, float, str, type(None)))}}
         meta.update(metadata or {})
         return cls(tree.children_left, tree.children_right, tree.feature,
-                   tree.threshold, tree.value, clf.classes_,
+                   tree.threshold, tree.value, getattr(clf, 'classes_', None),
                    n_features=tree.n_features, feature_names=feature_names,
                    metadata=meta,
                    missing_go_to_left=getattr(tree, 'missing_go_to_left',
@@ -135,20 +155,28 @@ class TreeStructure(object):
             raise ValueError('Not a ctreex tree description.')
         if d.get('format_version', 0) > JSON_FORMAT_VERSION:
             raise ValueError('Unsupported tree format version.')
+        task = d.get('task', CLASSIFICATION)  # version 1: classifiers only
+        if task not in TASKS:
+            raise ValueError('Unknown task: {!r}.'.format(task))
         metadata = {k: v for k, v in d.items() if k not in (
-            'format', 'format_version', 'children_left', 'children_right',
-            'feature', 'threshold', 'value', 'classes', 'n_features',
-            'feature_names', 'missing_go_to_left')}
+            'format', 'format_version', 'task', 'children_left',
+            'children_right', 'feature', 'threshold', 'value', 'classes',
+            'n_features', 'feature_names', 'missing_go_to_left')}
+        classes = d['classes'] if task == CLASSIFICATION else None
+        if task == CLASSIFICATION and classes is None:
+            raise ValueError('Classification trees need classes.')
         return cls(d['children_left'], d['children_right'], d['feature'],
-                   d['threshold'], d['value'], d['classes'],
+                   d['threshold'], d['value'], classes,
                    n_features=d.get('n_features'),
                    feature_names=d.get('feature_names'), metadata=metadata,
                    missing_go_to_left=d.get('missing_go_to_left'))
 
     def to_dict(self):
         d = {'format': JSON_FORMAT, 'format_version': JSON_FORMAT_VERSION,
+             'task': self.task,
              'n_features': self.n_features,
-             'classes': self.classes.tolist(),
+             'classes': (None if self.classes is None
+                         else self.classes.tolist()),
              'feature_names': self.feature_names,
              'children_left': self.children_left.tolist(),
              'children_right': self.children_right.tolist(),
@@ -170,6 +198,11 @@ class TreeStructure(object):
 
     # -------------------------------------------------------------- inspect
     @property
+    def task(self):
+        """``'classification'`` or ``'regression'`` (without classes)."""
+        return REGRESSION if self.classes is None else CLASSIFICATION
+
+    @property
     def n_nodes(self):
         return self.children_left.shape[0]
 
@@ -184,7 +217,17 @@ class TreeStructure(object):
 
     def leaf_class(self, leaf):
         """Majority class of a node (ties go to the first class)."""
+        if self.classes is None:
+            raise TypeError('Regression trees have no classes; use '
+                            'leaf_value.')
         return self.classes[int(np.argmax(self.value[leaf]))]
+
+    def leaf_value(self, leaf):
+        """Prediction of a node of a regression tree."""
+        if self.classes is not None:
+            raise TypeError('Classification trees predict classes; use '
+                            'leaf_class.')
+        return float(self.value[leaf, 0])
 
     def apply(self, X):
         """
@@ -212,17 +255,28 @@ class TreeStructure(object):
         return leaves
 
     def predict(self, X):
-        """Predicts the (majority) class of each data point."""
-        return np.asarray([self.leaf_class(l) for l in self.apply(X)])
+        """Predicts the (majority) class -- or, for regression trees, the
+        value -- of each data point."""
+        leaves = self.apply(X)
+        if self.classes is None:
+            return self.value[leaves, 0]
+        return np.asarray([self.leaf_class(leaf) for leaf in leaves])
 
     def predict_proba(self, X):
+        """Class probabilities of each data point (classifiers only)."""
+        if self.classes is None:
+            raise TypeError('Regression trees do not predict probabilities.')
         value = self.value[self.apply(X)]
         return value / value.sum(axis=1, keepdims=True)
 
     def __repr__(self):
+        if self.classes is None:
+            outputs = 'task=regression'
+        else:
+            outputs = 'classes={}'.format(self.classes.tolist())
         return 'TreeStructure(n_nodes={}, n_leaves={}, n_features={}, ' \
-               'classes={})'.format(self.n_nodes, self.leaves.shape[0],
-                                    self.n_features, self.classes.tolist())
+               '{})'.format(self.n_nodes, self.leaves.shape[0],
+                            self.n_features, outputs)
 
 
 def load_tree(path_or_object, feature_names=None):

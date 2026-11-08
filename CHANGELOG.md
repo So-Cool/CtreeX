@@ -87,6 +87,56 @@
   (without the `counterfactual` and `target_class` arguments).
   The support sets of leaves (`support_set_metric`) keep `same` and `other`,
   which refer to the class of the reference leaf.
+* **Regression trees.**
+  `TreeStructure` describes regression trees (without `classes`, a single
+  value per node), e.g., built from `sklearn.tree.DecisionTreeRegressor`;
+  its `task` is `'regression'` (`'classification'` otherwise),
+  `predict` returns values, `leaf_value` gives the prediction of a leaf and
+  `predict_proba` and `leaf_class` raise `TypeError`.
+  The JSON format (version 2) records the `task`;
+  version 1 files are read as classifiers.
+* **Targets of regression trees.**
+  Regression trees need a target:
+  `ValueChange(delta)` for leaves predicting at least `prediction + delta` for
+  a positive `delta` and at most `prediction + delta` for a negative one; and
+  `ValueAtLeast(value)`, `ValueAtMost(value)` and
+  `ValueWithin(tolerance)` for the changes that keep the prediction within the
+  tolerance.
+  At distance 1 only the counterfactuals of leaves predicting the same value
+  are merged.
+  `DistanceCounterfactuals.leaf_values` and `ranked_values` report the
+  values of the leaves and the range of the values every ranked
+  counterfactual leads to (instead of `leaf_classes` and `ranked_classes`),
+  `ranked(with_values=True)` returns
+  `(distance, (smallest, largest), counterfactual)` triples and
+  `CounterfactualExplanation.task` records the kind of the tree.
+  The `TargetContext` has the `task` and the `leaf_values`
+  (its class attributes are `None` for regression trees).
+* **Leaf comparisons of regression trees.**
+  `support_set_metric`, `volatility_index`, `leaf_metric_barplot` and
+  `leaf_metric_histogram` take a `tolerance`:
+  leaves whose values differ by at most the tolerance are the same
+  (`ctreex.counterfactuals.same_leaves`).
+  `TreeCounterfactualExplainer.support_set_metric(leaf, tolerance)` and
+  `volatility_index(leaf, tolerance)` require it for regression trees
+  (and reject it for classification trees);
+  `leaf_distance_matrix` returns the values of the leaves instead of their
+  classes.
+* **Several target classes.**
+  `TargetClass('a', 'b')` leads to class `a` or `b`;
+  the classes are stored in `TargetClass.labels` (instead of `label`) and
+  none of them can be the prediction.
+* **Confident leaves.**
+  `ClassProbability('a', ..., at_least=p)` leads to leaves that predict one
+  of the classes with a proportion of at least `p`;
+  the classes may include the prediction.
+* **Numerical columns described as categories.**
+  Column names containing the separator (e.g., `petal_length`) are read as
+  one-hot columns (`<feature>_<category>`) by
+  `FeatureSpec.from_column_names` unless they are listed as `numerical`;
+  the explainer now detects one-hot columns split at thresholds outside of
+  `[0, 1)` and explains the likely cause (previously the error was, e.g.,
+  "One-hot error: too many 1s for feature 'petal'.").
 
 ## 0.0.4
 

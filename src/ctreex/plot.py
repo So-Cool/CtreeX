@@ -6,6 +6,8 @@ and ``leaf_metric_histogram`` helpers.
 """
 import numpy as np
 
+from ctreex.counterfactuals import same_leaves
+
 __all__ = ['metric_heat_map', 'leaf_metric_barplot', 'leaf_metric_histogram']
 
 
@@ -27,7 +29,8 @@ def _order_by_class(leaf_classes):
 def metric_heat_map(matrix, leaf_ids, leaf_classes, class_case=False,
                     annot=False, xtick=False, ytick=False, ax=None):
     """
-    Heat map of a leaf-to-leaf distance matrix with leaves grouped by class.
+    Heat map of a leaf-to-leaf distance matrix with leaves grouped by class
+    (sorted by their values for regression trees).
 
     Parameters
     ----------
@@ -70,21 +73,39 @@ def metric_heat_map(matrix, leaf_ids, leaf_classes, class_case=False,
     return ax
 
 
-def leaf_metric_barplot(leaf_id, matrix, leaf_ids, leaf_classes, ax=None):
-    """Stacked bar plot: number of leaves of every class at every distance
-    from ``leaf_id``."""
+def _groups(leaf_id, leaf_ids, leaf_classes, tolerance):
+    """``(label, mask)`` pairs: one per class, or -- with a tolerance -- the
+    leaves the same as ``leaf_id`` and the others."""
+    if tolerance is None:
+        return [(str(c), leaf_classes == c)
+                for c in sorted(set(leaf_classes.tolist()))]
+    reference = leaf_classes[int(np.flatnonzero(leaf_ids == leaf_id)[0])]
+    same = same_leaves(reference, leaf_classes, tolerance=tolerance)
+    return [('within {:g} of {:g}'.format(tolerance, float(reference)), same),
+            ('other', ~same)]
+
+
+def leaf_metric_barplot(leaf_id, matrix, leaf_ids, leaf_classes,
+                        tolerance=None, ax=None):
+    """
+    Stacked bar plot: number of leaves of every class at every distance
+    from ``leaf_id``.
+
+    For regression trees (``leaf_classes`` holds values) give a
+    ``tolerance``: the bars then count the leaves whose values differ from the
+    value of ``leaf_id`` by at most ``tolerance`` and the other leaves.
+    """
     plt = _plt()
     leaf_ids, leaf_classes = np.asarray(leaf_ids), np.asarray(leaf_classes)
     column = np.asarray(matrix)[:, int(np.flatnonzero(leaf_ids == leaf_id)[0])]
     values = sorted(set(column.tolist()))
-    classes = sorted(set(leaf_classes.tolist()))
     if ax is None:
         _, ax = plt.subplots()
     bottom = np.zeros(len(values))
-    for c in classes:
-        counts = np.array([np.sum((column == v) & (leaf_classes == c))
-                           for v in values], dtype=float)
-        ax.bar(range(len(values)), counts, bottom=bottom, label=str(c))
+    for label, members in _groups(leaf_id, leaf_ids, leaf_classes, tolerance):
+        counts = np.array([np.sum((column == v) & members) for v in values],
+                          dtype=float)
+        ax.bar(range(len(values)), counts, bottom=bottom, label=label)
         bottom += counts
     ax.set_xticks(range(len(values)))
     ax.set_xticklabels(['{:g}'.format(v) for v in values], rotation=90)
@@ -92,18 +113,24 @@ def leaf_metric_barplot(leaf_id, matrix, leaf_ids, leaf_classes, ax=None):
     return ax
 
 
-def leaf_metric_histogram(leaf_id, matrix, leaf_ids, leaf_classes, ax=None):
-    """Overlaid histograms (one per class) of the (whole-number) distances
-    from ``leaf_id`` to all the leaves; one bin per distance."""
+def leaf_metric_histogram(leaf_id, matrix, leaf_ids, leaf_classes,
+                          tolerance=None, ax=None):
+    """
+    Overlaid histograms (one per class) of the (whole-number) distances
+    from ``leaf_id`` to all the leaves; one bin per distance.
+
+    For regression trees give a ``tolerance`` (see
+    :func:`leaf_metric_barplot`).
+    """
     plt = _plt()
     leaf_ids, leaf_classes = np.asarray(leaf_ids), np.asarray(leaf_classes)
     column = np.asarray(matrix)[:, int(np.flatnonzero(leaf_ids == leaf_id)[0])]
     bins = np.arange(np.floor(column.min()), np.ceil(column.max()) + 2)
     if ax is None:
         _, ax = plt.subplots()
-    for c in sorted(set(leaf_classes.tolist())):
-        ax.hist(column[leaf_classes == c], bins=bins, alpha=0.4,
-                align='left', rwidth=0.7, label=str(c))
+    for label, members in _groups(leaf_id, leaf_ids, leaf_classes, tolerance):
+        ax.hist(column[members], bins=bins, alpha=0.4, align='left',
+                rwidth=0.7, label=label)
     ax.legend()
     ax.set_ylabel('Count')
     ax.set_xlabel('Distance')
