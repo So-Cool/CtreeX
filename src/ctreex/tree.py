@@ -267,22 +267,23 @@ class TreeStructure(object):
         child when it is not available), as in scikit-learn.
         """
         X = val.check_array_2d(X, self.n_features).astype(np.float64)
-        leaves = np.empty(X.shape[0], dtype=np.int64)
-        for i, x in enumerate(X):
-            node = 0
-            while self.children_left[node] != TREE_LEAF:
-                value = x[self.feature[node]]
-                if np.isnan(value):
-                    go_left = (self.missing_go_to_left is not None
-                               and self.missing_go_to_left[node])
-                    node = (self.children_left[node] if go_left
-                            else self.children_right[node])
-                elif value <= self.threshold[node]:
-                    node = self.children_left[node]
-                else:
-                    node = self.children_right[node]
-            leaves[i] = node
-        return leaves
+        # all the data points descend the tree together, one level at a time
+        nodes = np.zeros(X.shape[0], dtype=np.int64)
+        active = np.flatnonzero(self.children_left[nodes] != TREE_LEAF)
+        while active.size:
+            current = nodes[active]
+            values = X[active, self.feature[current]]
+            missing = np.isnan(values)
+            if self.missing_go_to_left is None:
+                missing_left = np.zeros(current.shape, dtype=bool)
+            else:
+                missing_left = self.missing_go_to_left[current]
+            left = np.where(missing, missing_left,
+                            values <= self.threshold[current])
+            nodes[active] = np.where(left, self.children_left[current],
+                                     self.children_right[current])
+            active = active[self.children_left[nodes[active]] != TREE_LEAF]
+        return nodes
 
     def predict(self, X):
         """Predicts the (majority) class -- or, for regression trees, the

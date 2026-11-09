@@ -41,6 +41,25 @@
   `uncovered` by `max_rules`.
   `summary_text(summary)` returns "IF ... THEN the prediction is ..."
   sentences (`ctreex.text.rule_sentence`, `band`).
+* **Tree ensembles (experimental).**
+  New `ctreex.ensemble` module (not exported by `ctreex`):
+  `EnsembleStructure` describes random forests and extra-trees
+  (classifiers and regressors) with their trees, independently of
+  scikit-learn and storable as JSON (`load_ensemble`), and
+  `EnsembleCounterfactualExplainer` finds their exact counterfactuals at
+  distances 1 and 2 by evaluating the ensemble on every cell -- between the
+  thresholds of all the trees -- reachable by changing one or two features.
+  Distance-1 counterfactuals are merged ranges (categories) per outcome;
+  distance-2 ones are rectangles of two features whose changes are both
+  needed (neither change alone reaches the target).
+  It supports the targets (except `MinSamples` and `Leaves`), `excluded`,
+  `included`, `directions`, `describe`, `explanation_text`,
+  `counterfactual_point` and `sample_counterfactual`;
+  `max_evaluations` (one million points by default) limits the work and the
+  other explanations raise `NotImplementedError`.
+* **Vectorised tree routing.**
+  `TreeStructure.apply` routes all the data points through the tree
+  together, one level at a time.
 * **Benchmarks.**
   `notebooks/benchmarks.ipynb` times the explainer for trees with 100 to
   5,000 leaves (not run by CI).

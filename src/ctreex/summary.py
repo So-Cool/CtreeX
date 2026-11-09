@@ -16,8 +16,8 @@ and together they cover all the leaves of the outcome:
    feature adding categories, as long as every leaf the rule overlaps has
    the outcome; and
 2. a greedy set cover picks the rule containing the most leaves not yet covered
-   (in case of ties, more training samples and fewer conditions are prioritised)
-   until every leaf of the outcome is contained in a rule.
+   (in case of ties, more training samples and fewer conditions are
+   prioritised) until every leaf of the outcome is contained in a rule.
 
 The set cover is not guaranteed to be the smallest possible (finding it is
 computationally hard).

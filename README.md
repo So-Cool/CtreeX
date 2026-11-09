@@ -251,6 +251,31 @@ closest counterfactuals involve it (`FeatureAudit`).
 Regression trees need a `tolerance` (predictions that differ by more are
 different) and, with data, a `target`.
 
+### Tree ensembles (experimental)
+
+`ctreex.ensemble.EnsembleCounterfactualExplainer` is a proof of concept for
+random forests and extra-trees (classifiers and regressors, which average
+their trees):
+
+```python
+from ctreex.ensemble import EnsembleCounterfactualExplainer
+
+explainer = EnsembleCounterfactualExplainer(forest, spec)
+explanation = explainer.explain_instance(x)   # distances 1 and 2
+explainer.explanation_text(explanation)
+```
+
+It describes the feature space with the cells between the thresholds of all
+the trees and evaluates the ensemble on every cell reachable by changing one
+or two features, so its counterfactuals are exact:
+ranges (categories) of one feature at distance 1 and rectangles of two
+features -- whose changes are both needed -- at distance 2.
+Targets (except `MinSamples` and `Leaves`), `excluded`, `included`,
+`directions`, `describe`, the text output and the data points of
+counterfactuals work as for single trees;
+`max_evaluations` (one million points by default) limits the work.
+Ensembles are stored as JSON with `ctreex.ensemble.EnsembleStructure`.
+
 The leaf-to-leaf distance matrix (`explainer.leaf_distance_matrix()`), its
 heat map and histograms (`ctreex.plot`) and the *volatility index* of a leaf
 -- i.e., how close it is to leaves of other classes
