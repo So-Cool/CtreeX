@@ -138,6 +138,17 @@
 * **Decoding.**
   `TreeCounterfactualExplainer.decode(X)` returns the base feature values of
   one data point or a list of them.
+* **Plain-text explanations.**
+  New `ctreex.text` module with a generic template built from the display
+  names of the features, the names of their categories and the names of the
+  classes (no templates per data set).
+  `TreeCounterfactualExplainer.explanation_text(explanation, contextualised, n, integer_ranges, hide_thresholds, random_state)`
+  returns the prediction followed by one sentence per counterfactual, e.g.,
+  "Had duration been less or equal to 22.5 (instead of 48), the prediction
+  would have been low risk.", with ", provided that ..." for contextualised
+  counterfactuals;
+  `supportive_text(x, target, integer_ranges)` verbalises supportive
+  explanations.
 
 ## 0.1.0
 

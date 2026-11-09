@@ -29,6 +29,7 @@ from ctreex import _validation as val
 from ctreex import audit
 from ctreex import points
 from ctreex import supportive as sup
+from ctreex import text
 from ctreex import targets as tgt
 from ctreex.features import NUMERICAL, FeatureSpec
 from ctreex.tree import REGRESSION, load_tree
@@ -928,6 +929,108 @@ class TreeCounterfactualExplainer(object):
             return hidden
         return cfs.describe_counterfactuals(
             counterfactuals, self.spec, integer_ranges=integer_ranges)
+
+    def _outcome(self, explanation, found, rank):
+        """The outcome clause of a ranked counterfactual."""
+        prediction = text.format_value(explanation.prediction)
+        if self.task == REGRESSION:
+            low, high = found.ranked_values[rank]
+            value = text.format_value(low) if low == high else \
+                'between {} and {}'.format(text.format_value(low),
+                                           text.format_value(high))
+            return 'the prediction would have been {} (instead of {})'\
+                ''.format(value, prediction)
+        classes = found.ranked_classes[rank]
+        if classes == [explanation.prediction]:
+            return 'the prediction would still have been {}'.format(
+                prediction)
+        return 'the prediction would have been {}'.format(
+            text.join([text.format_value(c) for c in classes], 'or'))
+
+    def explanation_text(self, explanation, contextualised=None, n=None,
+                         integer_ranges=False, hide_thresholds=False,
+                         random_state=None):
+        """
+        A counterfactual explanation as plain-text sentences from a generic
+        template (see :mod:`ctreex.text`), e.g.,
+        "Had duration been less or equal to 22.5 (instead of 48), the
+        prediction would have been low risk."
+
+        Parameters
+        ----------
+        explanation : CounterfactualExplanation
+        contextualised : list, optional
+            The output of :meth:`contextualise`
+            (``ctreex.supportive.ContextualisedCounterfactual``);
+            when given, every counterfactual ends with its context
+            ("..., provided that ...").
+        n : int, optional
+            The largest number of counterfactual sentences (all by default).
+        integer_ranges, hide_thresholds, random_state
+            See :meth:`describe`.
+
+        Returns
+        -------
+        list of str
+            The prediction followed by one sentence per (contextualised)
+            counterfactual, by distance and rank.
+        """
+        def described(changes):
+            return self.describe({0: changes}, integer_ranges=integer_ranges,
+                                 hide_thresholds=hide_thresholds,
+                                 random_state=rng)[0]
+        rng = np.random.default_rng(random_state)
+        if contextualised is None:
+            items = [(found, rank, cf, None)
+                     for found in explanation.counterfactuals
+                     for rank, cf in found.ranked.items()]
+        else:
+            items = [(explanation.at_distance(c.distance), c.rank, c.change,
+                      c.context) for c in contextualised]
+        if n is not None:
+            items = items[:n]
+        sentences = [text.prediction_sentence(explanation.prediction)]
+        for found, rank, change, context in items:
+            sentences.append(text.counterfactual_sentence(
+                described(change), self._outcome(explanation, found, rank),
+                described(context) if context else None))
+        return sentences
+
+    def supportive_text(self, x, target=None, integer_ranges=False):
+        """
+        The supportive explanations of a data point
+        (:meth:`supportive_explanations`) as plain-text sentences, e.g.,
+        "The prediction is low risk since property is real estate and
+        duration is less or equal to 11.5, whatever the other features."
+
+        Parameters
+        ----------
+        x : array-like
+            One-hot encoded data point.
+        target : ctreex.targets.Target, optional
+            See :meth:`supportive_explanations`.
+        integer_ranges : bool
+            See :meth:`describe`.
+
+        Returns
+        -------
+        list of str
+            One sentence per explanation.
+        """
+        found = self.supportive_explanations(x, target=target)
+        prediction = text.format_value(
+            self.target_context(self.predict_leaf(x)).prediction)
+        if isinstance(target, tgt.ValueWithin):
+            prediction = 'within {} of {}'.format(
+                text.format_value(target.tolerance), prediction)
+        elif target is not None and not isinstance(target, tgt.SameClass):
+            prediction = '{} ({!r} holds)'.format(prediction, target)
+        sentences = []
+        for explanation in found:
+            conditions = self.describe({0: explanation.conditions},
+                                       integer_ranges=integer_ranges)[0]
+            sentences.append(text.supportive_sentence(conditions, prediction))
+        return sentences
 
     def decode(self, X):
         """

@@ -155,6 +155,19 @@ With `same_leaf=True` they lead to the leaf of the reference instead, so the
 two data points may share their prediction;
 regression trees need a `tolerance` around the prediction of the reference.
 
+`explainer.explanation_text(explanation)` turns an explanation into
+sentences from a generic template built from the display names of the
+features, the names of their categories and the names of the classes
+(`ctreex.text`), e.g.,
+"Had duration been less or equal to 22.5 (instead of 48), the prediction
+would have been low risk."
+Contextualised counterfactuals end with their context
+(`explanation_text(explanation, explainer.contextualise(explanation))`:
+"..., provided that property is real estate.") and
+`explainer.supportive_text(x)` verbalises supportive explanations
+("The prediction is low risk since property is real estate and duration is
+less or equal to 11.5, whatever the other features.").
+
 Counterfactuals describe regions -- ranges and sets of categories -- that
 can be turned into data points (`ctreex.points`):
 
@@ -242,6 +255,7 @@ the same, e.g., `explainer.volatility_index(leaf, tolerance=50)`.
 |---|---|
 | `TreeCounterfactualExplainer(model, feature_spec, class_names)` | the explainer; `explain_instance(x, instance_values, max_distance, excluded, included, target, rank_by, directions)` returns a `CounterfactualExplanation`; `explain_contrast(x, x_reference, same_leaf, tolerance)` contrasts two data points |
 | `OtherClass`, `TargetClass`, `SameClass`, `ClassProbability`, `ValueChange`, `ValueAtLeast`, `ValueAtMost`, `ValueWithin`, `MinSamples`, `Leaves`, `AllOf`, `AnyOf`, `Not`, `Target` | the leaves the counterfactuals lead to (`ctreex.targets`) |
+| `explanation_text`, `supportive_text` | plain-text explanations from a generic template (`ctreex.text`) |
 | `counterfactual_point`, `sample_counterfactual`, `counterfactual_leaves`, `exemplars`, `decode` | data points of counterfactuals (`ctreex.points`) |
 | `feature_audit` | where a feature alone changes the prediction (`FeatureAudit`, `FeatureFlip`, `ctreex.audit`) |
 | `monotonicity_violations` | pairs of leaves where changing a feature in a direction makes the prediction worse (`MonotonicityViolation`, `ctreex.audit`) |
