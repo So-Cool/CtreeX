@@ -28,6 +28,7 @@ from ctreex import meta_features as mf
 from ctreex import _validation as val
 from ctreex import audit
 from ctreex import points
+from ctreex import summary
 from ctreex import supportive as sup
 from ctreex import text
 from ctreex import targets as tgt
@@ -1036,6 +1037,91 @@ class TreeCounterfactualExplainer(object):
             conditions = self.describe({0: explanation.conditions},
                                        integer_ranges=integer_ranges)[0]
             sentences.append(text.supportive_sentence(conditions, prediction))
+        return sentences
+
+    def global_summary(self, classes=None, bands=None, max_rules=None):
+        """
+        A few general rules describing every outcome of the tree (see
+        :mod:`ctreex.summary`).
+
+        Parameters
+        ----------
+        classes : list, optional
+            Classification trees: the classes to describe (all the classes
+            predicted by some leaf by default).
+        bands : list of tuple, optional
+            Regression trees (required): the bands of predictions to describe,
+            ``(low, high)`` meaning ``low <= prediction < high`` (``None`` is
+            unbounded), e.g., ``[(None, 100), (100, 200), (200, None)]``.
+        max_rules : int, optional
+            The largest number of rules per outcome (all that are needed by
+            default).
+
+        Returns
+        -------
+        dict
+            ``{outcome: ctreex.summary.OutcomeSummary}``, with the classes or
+            the bands as outcomes.
+        """
+        lmf = self.leaf_meta_features
+        samples = self._leaf_statistic('n_node_samples')
+        out = {}
+        if self.task == REGRESSION:
+            if classes is not None:
+                raise ValueError('Regression trees are summarised by bands '
+                                 'of predictions, not classes.')
+            if not bands:
+                raise ValueError('Regression trees need bands of '
+                                 'predictions, e.g., '
+                                 '[(None, 100), (100, None)].')
+            for low, high in bands:
+                if low is not None and high is not None and low >= high:
+                    raise ValueError('Empty band: {}.'.format((low, high)))
+                positive = np.ones(lmf.leaf_ids.shape, dtype=bool)
+                if low is not None:
+                    positive &= lmf.leaf_values >= low
+                if high is not None:
+                    positive &= lmf.leaf_values < high
+                out[(low, high)] = summary.summarise(
+                    lmf, (low, high), positive, samples=samples,
+                    values=lmf.leaf_values, max_rules=max_rules)
+            return out
+        if bands is not None:
+            raise ValueError('Classification trees are summarised by classes, '
+                             'not bands.')
+        predicted = set(lmf.leaf_classes.tolist())
+        if classes is None:
+            classes = [c for c in self._class_labels if c in predicted]
+        for label in classes:
+            if label not in predicted:
+                raise ValueError('No leaf predicts the class {!r}.'.format(
+                    label))
+            column = self._class_labels.index(label)
+            out[label] = summary.summarise(
+                lmf, label, lmf.leaf_classes == label, samples=samples,
+                probabilities=self._leaf_probabilities[:, column],
+                max_rules=max_rules)
+        return out
+
+    def summary_text(self, global_summary, integer_ranges=False):
+        """
+        The rules of a global summary (:meth:`global_summary`) as plain-text
+        sentences, e.g., "IF checking account is no checking account THEN the
+        prediction is low risk."
+
+        Returns
+        -------
+        list of str
+            One sentence per rule, outcome by outcome.
+        """
+        sentences = []
+        for outcome, described in global_summary.items():
+            label = text.band(*outcome) if self.task == REGRESSION \
+                else text.format_value(outcome)
+            for rule in described.rules:
+                conditions = self.describe({0: rule.conditions},
+                                           integer_ranges=integer_ranges)[0]
+                sentences.append(text.rule_sentence(conditions, label))
         return sentences
 
     def decode(self, X):

@@ -24,6 +24,23 @@
   `monotonicity_violations` and `feature_flips` the leaf-to-leaf `matrix`
   (the explainer passes its cached one).
   `LeafMetaFeatures.leaf_index` looks leaves up in a dictionary.
+* **Global summaries.**
+  New `ctreex.summary` module and
+  `TreeCounterfactualExplainer.global_summary(classes, bands, max_rules)`:
+  a few general, exact and possibly overlapping rules per class -- or, for
+  regression trees, per band of predictions `(low, high)` meaning
+  `low <= prediction < high` -- that together cover all its leaves.
+  Every leaf is grown into a rule one feature at a time (extending intervals
+  and adding categories while every overlapped leaf has the outcome) and a
+  lazy greedy set cover picks the rules containing the most uncovered leaves.
+  Every `Rule` holds its `conditions` (in the counterfactual format), the
+  `leaves` it contains and, when the tree stores them, their training
+  `samples` and `purity` (classification) or the range of their `values`
+  (regression);
+  every `OutcomeSummary` lists its rules, leaves and the leaves left
+  `uncovered` by `max_rules`.
+  `summary_text(summary)` returns "IF ... THEN the prediction is ..."
+  sentences (`ctreex.text.rule_sentence`, `band`).
 * **Benchmarks.**
   `notebooks/benchmarks.ipynb` times the explainer for trees with 100 to
   5,000 leaves (not run by CI).

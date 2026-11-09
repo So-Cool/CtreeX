@@ -15,7 +15,8 @@ would have been low risk."
 """
 
 __all__ = ['format_value', 'join', 'condition', 'prediction_sentence',
-           'counterfactual_sentence', 'supportive_sentence']
+           'counterfactual_sentence', 'supportive_sentence', 'band',
+           'rule_sentence']
 
 
 def format_value(value):
@@ -108,3 +109,34 @@ def supportive_sentence(conditions, prediction):
     return 'The prediction is {} since {}, whatever the other ' \
         'features.'.format(prediction, join(
             condition(name, part) for name, part in conditions.items()))
+
+
+def band(low, high):
+    """Describes a band of predictions ``low <= prediction < high``."""
+    if low is None and high is None:
+        return 'any value'
+    if low is None:
+        return 'less than {}'.format(format_value(high))
+    if high is None:
+        return 'at least {}'.format(format_value(low))
+    return 'at least {} and less than {}'.format(format_value(low),
+                                                 format_value(high))
+
+
+def rule_sentence(conditions, outcome):
+    """
+    ``'IF <conditions> THEN the prediction is <outcome>.'``
+
+    Parameters
+    ----------
+    conditions : dict
+        ``{feature name: {'is': [...], 'wannabe': [...]}}`` (from
+        ``describe``); empty for the whole feature space.
+    outcome : str
+        The (formatted) outcome, e.g., ``'low risk'``.
+    """
+    if not conditions:
+        return 'The prediction is always {}.'.format(outcome)
+    return 'IF {} THEN the prediction is {}.'.format(
+        ' AND '.join(condition(name, part)
+                     for name, part in conditions.items()), outcome)

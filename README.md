@@ -217,6 +217,18 @@ Supportive explanations and invariance ranges keep the predicted class by
 default (`SameClass()`);
 regression trees need a target, e.g., `ValueWithin(10)`.
 
+`explainer.global_summary()` describes the whole tree with a few general
+rules per class (`ctreex.summary`), e.g.,
+"IF checking account is no checking account THEN the prediction is low risk."
+Every leaf of a class is grown into the largest rule -- one feature at a
+time -- whose data points all get that class, and a greedy set cover keeps
+the rules needed to cover all the leaves of the class;
+the rules are exact, may overlap and report the leaves they contain with
+their training samples and purity (`Rule`, `OutcomeSummary`).
+Regression trees are summarised by bands of predictions, e.g.,
+`global_summary(bands=[(None, 100), (100, None)])`, and
+`explainer.summary_text(summary)` verbalises the rules.
+
 `explainer.monotonicity_violations('income', 'increase', positive='good')`
 audits a tree (`ctreex.audit`):
 it lists the pairs of leaves where changing a numerical or ordered feature in
@@ -261,6 +273,7 @@ the same, e.g., `explainer.volatility_index(leaf, tolerance=50)`.
 | `OtherClass`, `TargetClass`, `SameClass`, `ClassProbability`, `ValueChange`, `ValueAtLeast`, `ValueAtMost`, `ValueWithin`, `MinSamples`, `Leaves`, `AllOf`, `AnyOf`, `Not`, `Target` | the leaves the counterfactuals lead to (`ctreex.targets`) |
 | `explanation_text`, `supportive_text` | plain-text explanations from a generic template (`ctreex.text`) |
 | `counterfactual_point`, `sample_counterfactual`, `counterfactual_leaves`, `exemplars`, `decode` | data points of counterfactuals (`ctreex.points`) |
+| `global_summary`, `summary_text` | a few general rules per outcome (`Rule`, `OutcomeSummary`, `ctreex.summary`) |
 | `feature_audit` | where a feature alone changes the prediction (`FeatureAudit`, `FeatureFlip`, `ctreex.audit`) |
 | `monotonicity_violations` | pairs of leaves where changing a feature in a direction makes the prediction worse (`MonotonicityViolation`, `ctreex.audit`) |
 | `supportive_explanations`, `invariance_ranges`, `contextualise` | what guarantees a prediction (`SupportiveExplanation`, `ContextualisedCounterfactual`, `ctreex.supportive`) |

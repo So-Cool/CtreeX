@@ -15,6 +15,7 @@ from ctreex.explainer import (CounterfactualExplanation,
                               TreeCounterfactualExplainer)
 from ctreex.features import Feature, FeatureSpec
 from ctreex.audit import FeatureAudit, FeatureFlip, MonotonicityViolation
+from ctreex.summary import OutcomeSummary, Rule
 from ctreex.supportive import (ContextualisedCounterfactual,
                                SupportiveExplanation)
 from ctreex.targets import (AllOf, AnyOf, ClassProbability, Leaves,
@@ -30,6 +31,7 @@ __all__ = ['TreeCounterfactualExplainer', 'CounterfactualExplanation',
            'ValueWithin', 'MinSamples', 'Leaves', 'AllOf', 'AnyOf', 'Not',
            'SupportiveExplanation', 'ContextualisedCounterfactual',
            'MonotonicityViolation', 'FeatureAudit', 'FeatureFlip',
+           'Rule', 'OutcomeSummary',
            'TreeStructure', 'load_tree']
 
 try:
