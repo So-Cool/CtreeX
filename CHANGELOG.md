@@ -5,6 +5,28 @@
 * **Style checks.**
   The code and tests follow `flake8` (configured in `.flake8`), which is
   part of the development dependencies and runs in CI (the `lint` job).
+* **Faster explanations.**
+  The per-leaf and per-pair loops are vectorised with numpy, with identical
+  results:
+  e.g., for a tree with 2,000 leaves, explaining a data point takes about
+  0.15 instead of 0.5 seconds, the leaf-to-leaf distance matrix 0.15 instead
+  of minutes and a feature audit about 7 instead of 155 seconds.
+  New vectorised helpers:
+  `ctreex.distances.allowed_rows`, `exact_distances`, `incompatible_rows`,
+  `group_distances` (the per-feature distances between a data point and all
+  the leaves) and `group_incompatibility`;
+  `ctreex.counterfactuals.merge_intervals` and `mask_intervals` (linear-time
+  replacements of repeated `grow_region` calls, which remains available);
+  `ctreex.audit.only_on_pairs` (the pairs of leaves differing only on a
+  feature).
+  `extract_counterfactuals` takes the precomputed `distances`,
+  `contextualise_counterfactual` the precomputed `fixed` consistency, and
+  `monotonicity_violations` and `feature_flips` the leaf-to-leaf `matrix`
+  (the explainer passes its cached one).
+  `LeafMetaFeatures.leaf_index` looks leaves up in a dictionary.
+* **Benchmarks.**
+  `notebooks/benchmarks.ipynb` times the explainer for trees with 100 to
+  5,000 leaves (not run by CI).
 
 ## 0.1.1
 

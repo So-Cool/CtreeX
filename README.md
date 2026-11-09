@@ -292,6 +292,11 @@ uv run flake8 src tests     # style checks (also run by CI)
 uv sync --group notebooks && uv run jupyter lab notebooks/
 ```
 
+`notebooks/benchmarks.ipynb` times the explainer for trees with 100 to 5,000
+leaves (it is not run by CI);
+explaining a data point takes well under a second for a tree with 5,000
+leaves.
+
 ## The original implementation
 
 CtreeX started as a pandas-based implementation written in 2018.

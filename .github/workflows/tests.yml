@@ -45,6 +45,6 @@ jobs:
           key: uci-german-credit-v1
       - name: Run the notebooks
         run: |
-          for notebook in notebooks/*.ipynb; do
+          for notebook in notebooks/0*.ipynb; do
             uv run jupyter nbconvert --to notebook --execute --output /tmp/out.ipynb "$notebook"
           done

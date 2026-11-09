@@ -31,12 +31,13 @@ import math
 
 import numpy as np
 
-from ctreex.distances import similarity
+from ctreex.distances import group_distances
 from ctreex.features import NUMERICAL
 
 __all__ = ['support_set', 'same_leaves', 'support_set_metric',
            'volatility_index',
-           'grow_region', 'extract_counterfactuals', 'rank_counterfactuals',
+           'grow_region', 'merge_intervals', 'mask_intervals',
+           'extract_counterfactuals', 'rank_counterfactuals',
            'describe_counterfactuals', 'describe_range',
            'describe_integer_range', 'format_bound', 'MissingDistance']
 
@@ -209,6 +210,74 @@ def volatility_index(leaf, matrix, leaf_ids, leaf_classes, tolerance=None):
                      for n, leaves in support.items() if n > 0))
 
 
+def _key(bound, unbounded):
+    return unbounded if bound is None else float(bound)
+
+
+def merge_intervals(intervals):
+    """
+    The union of intervals ``(lower, upper]`` as disjoint intervals.
+
+    Adjacent (``a`` ending where ``b`` starts) and overlapping intervals are
+    joined; the result is sorted by the lower bounds, unbounded below first.
+    This is the linear-time (after sorting) counterpart of repeatedly
+    calling :func:`grow_region`.
+
+    Parameters
+    ----------
+    intervals : list
+        ``[lower, upper]`` pairs (strings or ``None``).
+
+    Returns
+    -------
+    list
+        ``[lower, upper]`` lists.
+    """
+    merged = []
+    for lower, upper in sorted(intervals, key=lambda i: (
+            _key(i[0], -np.inf), _key(i[1], np.inf))):
+        if merged and (merged[-1][1] is None or (
+                lower is not None and
+                float(lower) <= float(merged[-1][1]))):
+            if merged[-1][1] is not None and (
+                    upper is None or float(upper) > float(merged[-1][1])):
+                merged[-1][1] = upper
+            continue
+        merged.append([lower, upper])
+    return merged
+
+
+def mask_intervals(members, mask):
+    """
+    The intervals of the selected numerical meta-features of a feature,
+    adjacent ones joined.
+
+    Parameters
+    ----------
+    members : list of ctreex.meta_features.MetaFeature
+        The meta-features of one numerical feature, sorted by their
+        thresholds (as in ``LeafMetaFeatures.groups``).
+    mask : numpy.ndarray
+        Boolean mask over ``members``.
+
+    Returns
+    -------
+    list
+        ``[lower, upper]`` lists, sorted (the same as
+        ``merge_intervals`` of the selected intervals).
+    """
+    selected = np.flatnonzero(np.asarray(mask, dtype=bool))
+    if not selected.size:
+        return []
+    if selected[-1] - selected[0] + 1 == selected.size:  # one interval
+        return [[members[selected[0]].lower, members[selected[-1]].upper]]
+    breaks = np.flatnonzero(np.diff(selected) > 1)
+    starts = np.concatenate([[0], breaks + 1])
+    ends = np.concatenate([breaks, [selected.size - 1]])
+    return [[members[selected[a]].lower, members[selected[b]].upper]
+            for a, b in zip(starts, ends)]
+
+
 def grow_region(interval, intervals):
     """
     Merges adjacent intervals into ``interval`` (in place).
@@ -288,7 +357,7 @@ def in_direction(members, instance_group, wannabe, direction):
 
 def extract_counterfactuals(lmf, instance, instance_values, support,
                             distance=1, excluded=(), included=(), exact=True,
-                            directions=None):
+                            directions=None, distances=None):
     """
     Extracts the counterfactuals of a data point at a given distance.
 
@@ -321,6 +390,9 @@ def extract_counterfactuals(lmf, instance, instance_values, support,
         the values in the other direction are removed from the counterfactuals
         and a leaf is used only if some of its values lie in the given
         direction (see :func:`in_direction`).
+    distances : numpy.ndarray, optional
+        :func:`ctreex.distances.group_distances` of the data point (computed
+        when not given; pass it when extracting several distances).
 
     Returns
     -------
@@ -339,10 +411,13 @@ def extract_counterfactuals(lmf, instance, instance_values, support,
     leaves = support[distance]['target']
 
     per_leaf, per_feature = {}, {}
+    if distances is None:
+        distances = group_distances(lmf, instance, exact=exact)
     for leaf in leaves:
-        row = lmf.row(leaf)
-        changed = [group for group in lmf.groups
-                   if similarity([group], row, instance, exact) > 0]
+        position = lmf.leaf_index(leaf)
+        row = lmf.matrix[position]
+        changed = [group for group, d in zip(lmf.groups, distances[position])
+                   if d > 0]
         if any(feature in excluded or feature not in included
                for _, feature, _ in changed):
             continue  # this leaf needs a forbidden feature
@@ -354,12 +429,7 @@ def extract_counterfactuals(lmf, instance, instance_values, support,
             # intervals (categories)
             selected = [m for m, v in zip(members, values) if v != -1]
             if kind == NUMERICAL:
-                intervals = [(m.lower, m.upper) for m in selected]
-                wannabe = []
-                while intervals:
-                    c = list(intervals.pop())
-                    c, intervals = grow_region(c, intervals)
-                    wannabe.append(c)
+                wannabe = mask_intervals(members, values != -1)
             else:
                 wannabe = [m.category for m in selected]
             if directions and feature in directions:
@@ -387,14 +457,8 @@ def _merge(per_leaf, leaves, feature):
             numerical = True
     current = _unique(current)
     if numerical:
-        merged = []
-        while wannabe:
-            c = list(wannabe.pop())
-            c, wannabe = grow_region(c, wannabe)
-            merged.append(c)
         # unbounded-below intervals first, the others by their lower bound
-        wannabe = sorted(merged, key=lambda x: (
-            -np.inf if x[0] is None else float(x[0])))
+        wannabe = merge_intervals(wannabe)
     else:
         wannabe = _unique(wannabe)
     return {feature: {'is': current, 'wannabe': wannabe}}

@@ -21,12 +21,13 @@ import dataclasses
 import numpy as np
 
 from ctreex import counterfactuals as cfs
-from ctreex.distances import allowed, incompatible
+from ctreex.distances import (allowed_rows, group_incompatibility,
+                              incompatible, leaf_distance_matrix)
 from ctreex.features import NUMERICAL
 
 __all__ = ['MonotonicityViolation', 'FeatureFlip', 'FeatureAudit',
-           'shared_region', 'differ_only_on', 'monotonicity_violations',
-           'feature_flips']
+           'shared_region', 'differ_only_on', 'only_on_pairs',
+           'monotonicity_violations', 'feature_flips']
 
 
 @dataclasses.dataclass
@@ -71,19 +72,9 @@ class MonotonicityViolation(object):
 
 def _describe(members, mask):
     """Allowed meta-features as ``wannabe`` values."""
-    kept = [m for m, keep in zip(members, mask) if keep]
-    if not kept:
-        return []
-    if kept[0].kind == NUMERICAL:
-        intervals = [(m.lower, m.upper) for m in kept]
-        wannabe = []
-        while intervals:
-            c = list(intervals.pop())
-            c, intervals = cfs.grow_region(c, intervals)
-            wannabe.append(c)
-        return sorted(wannabe, key=lambda c: -np.inf if c[0] is None
-                      else float(c[0]))
-    return [m.category for m in kept]
+    if members[0].kind == NUMERICAL:
+        return cfs.mask_intervals(members, mask)
+    return [m.category for m, keep in zip(members, mask) if keep]
 
 
 def shared_region(lmf, first, second, skip=()):
@@ -104,15 +95,36 @@ def shared_region(lmf, first, second, skip=()):
         ``{feature: {'is': [], 'wannabe': [...]}}`` for the features whose
         shared values are restricted (not all of them).
     """
-    a, b = lmf.row(first), lmf.row(second)
+    return _shared(lmf, _allowed_groups(lmf), lmf.leaf_index(first),
+                   lmf.leaf_index(second), skip)
+
+
+def _allowed_groups(lmf):
+    """:func:`ctreex.distances.allowed_rows` of every group."""
+    return [allowed_rows(lmf.matrix[:, indices])
+            for _, _, indices in lmf.groups]
+
+
+def _shared(lmf, allows, i, j, skip=(), cache=None):
+    """:func:`shared_region` of the leaves in rows ``i`` and ``j``;
+    ``cache`` (a dictionary) remembers the descriptions of masks."""
     region = {}
-    for _, feature, indices in lmf.groups:
+    for g, ((_, feature, indices), allowed_) in enumerate(zip(lmf.groups,
+                                                              allows)):
         if feature in skip:
             continue
-        mask = allowed(a[indices]) & allowed(b[indices])
-        if not mask.all():
-            members = [lmf.meta_features[i] for i in indices]
-            region[feature] = {'is': [], 'wannabe': _describe(members, mask)}
+        mask = allowed_[i] & allowed_[j]
+        if mask.all():
+            continue
+        key = (g, mask.tobytes())
+        if cache is None or key not in cache:
+            members = [lmf.meta_features[k] for k in indices]
+            wannabe = _describe(members, mask)
+            if cache is not None:
+                cache[key] = wannabe
+        else:
+            wannabe = cache[key]
+        region[feature] = {'is': [], 'wannabe': list(wannabe)}
     return region
 
 
@@ -126,7 +138,38 @@ def differ_only_on(lmf, feature, first, second):
     return True
 
 
-def monotonicity_violations(lmf, feature, direction, leaf_outcomes, worse):
+def only_on_pairs(lmf, feature, matrix=None):
+    """
+    All the (ordered) pairs of leaves that differ only on a feature.
+
+    Parameters
+    ----------
+    lmf : ctreex.meta_features.LeafMetaFeatures
+    feature : str
+    matrix : numpy.ndarray, optional
+        The leaf-to-leaf distance matrix
+        (:func:`ctreex.distances.leaf_distance_matrix`, computed when not
+        given).
+
+    Returns
+    -------
+    numpy.ndarray
+        ``(n_pairs, 2)`` row positions of the leaves (following
+        ``lmf.leaf_ids``), in the order of the leaves;
+        empty when the tree does not use the feature.
+    """
+    groups = [g for g in lmf.groups if g[1] == feature]
+    if not groups:
+        return np.zeros((0, 2), dtype=np.int64)
+    if matrix is None:
+        matrix = leaf_distance_matrix(lmf)
+    # incompatible on the feature and at distance 1, i.e., on no other one
+    return np.argwhere(group_incompatibility(lmf, groups[0][2])
+                       & (np.asarray(matrix) == 1))
+
+
+def monotonicity_violations(lmf, feature, direction, leaf_outcomes, worse,
+                            matrix=None):
     """
     Pairs of leaves where changing a feature in a direction, with the other
     features unchanged, makes the prediction worse.
@@ -143,6 +186,8 @@ def monotonicity_violations(lmf, feature, direction, leaf_outcomes, worse):
     worse : callable
         ``worse(before, after)`` indicates whether the prediction ``after``
         is worse than ``before``.
+    matrix : numpy.ndarray, optional
+        The leaf-to-leaf distance matrix (computed when not given).
 
     Returns
     -------
@@ -156,39 +201,32 @@ def monotonicity_violations(lmf, feature, direction, leaf_outcomes, worse):
     _, _, indices = groups[0]
     members = [lmf.meta_features[i] for i in indices]
     ids = lmf.leaf_ids.tolist()
-    positions = {}
-    for leaf in ids:
-        mask = allowed(lmf.row(leaf)[indices])
-        positions[leaf] = (mask, np.flatnonzero(mask))
+    allows = allowed_rows(lmf.matrix[:, indices])
+    groups_allowed, cache = _allowed_groups(lmf), {}
     violations = []
-    for i, first in enumerate(ids):
-        for j, second in enumerate(ids):
-            if first == second:
-                continue
-            before, after = positions[first][1], positions[second][1]
-            # the values of each leaf from (to) which the feature can move in
-            # the direction to (from) a value of the other leaf
-            if direction == cfs.INCREASE:
-                sources, destinations = before[before < after.max()], \
-                    after[after > before.min()]
-            else:
-                sources, destinations = before[before > after.min()], \
-                    after[after < before.max()]
-            if not sources.size or not worse(leaf_outcomes[i],
-                                             leaf_outcomes[j]):
-                continue
-            if not differ_only_on(lmf, feature, first, second):
-                continue
-            violations.append(MonotonicityViolation(
-                feature=feature, direction=direction, from_leaf=first,
-                to_leaf=second, from_outcome=leaf_outcomes[i],
-                to_outcome=leaf_outcomes[j],
-                before={feature: {'is': [], 'wannabe': _describe(
-                    members, np.isin(np.arange(len(members)), sources))}},
-                after={feature: {'is': [], 'wannabe': _describe(
-                    members, np.isin(np.arange(len(members)),
-                                     destinations))}},
-                context=shared_region(lmf, first, second, skip=(feature,))))
+    for i, j in only_on_pairs(lmf, feature, matrix).tolist():
+        first, second = ids[i], ids[j]
+        before, after = np.flatnonzero(allows[i]), np.flatnonzero(allows[j])
+        # the values of each leaf from (to) which the feature can move in
+        # the direction to (from) a value of the other leaf
+        if direction == cfs.INCREASE:
+            sources, destinations = before[before < after.max()], \
+                after[after > before.min()]
+        else:
+            sources, destinations = before[before > after.min()], \
+                after[after < before.max()]
+        if not sources.size or not worse(leaf_outcomes[i], leaf_outcomes[j]):
+            continue
+        violations.append(MonotonicityViolation(
+            feature=feature, direction=direction, from_leaf=first,
+            to_leaf=second, from_outcome=leaf_outcomes[i],
+            to_outcome=leaf_outcomes[j],
+            before={feature: {'is': [], 'wannabe': _describe(
+                members, np.isin(np.arange(len(members)), sources))}},
+            after={feature: {'is': [], 'wannabe': _describe(
+                members, np.isin(np.arange(len(members)), destinations))}},
+            context=_shared(lmf, groups_allowed, i, j, skip=(feature,),
+                            cache=cache)))
     return violations
 
 
@@ -261,7 +299,7 @@ class FeatureAudit(object):
     closest: list = None
 
 
-def feature_flips(lmf, feature, leaf_outcomes, changed):
+def feature_flips(lmf, feature, leaf_outcomes, changed, matrix=None):
     """
     Pairs of leaves where changing a feature alone changes the prediction.
 
@@ -274,6 +312,8 @@ def feature_flips(lmf, feature, leaf_outcomes, changed):
     changed : callable
         ``changed(before, after)`` tells whether the prediction ``after`` is
         different from ``before``.
+    matrix : numpy.ndarray, optional
+        The leaf-to-leaf distance matrix (computed when not given).
 
     Returns
     -------
@@ -287,20 +327,19 @@ def feature_flips(lmf, feature, leaf_outcomes, changed):
     _, _, indices = groups[0]
     members = [lmf.meta_features[i] for i in indices]
     ids = lmf.leaf_ids.tolist()
+    allows = allowed_rows(lmf.matrix[:, indices])
+    groups_allowed, cache = _allowed_groups(lmf), {}
     flips = []
-    for i, first in enumerate(ids):
-        for j, second in enumerate(ids):
-            if first == second or not changed(leaf_outcomes[i],
-                                              leaf_outcomes[j]):
-                continue
-            if not differ_only_on(lmf, feature, first, second):
-                continue
-            flips.append(FeatureFlip(
-                feature=feature, from_leaf=first, to_leaf=second,
-                from_outcome=leaf_outcomes[i], to_outcome=leaf_outcomes[j],
-                before={feature: {'is': [], 'wannabe': _describe(
-                    members, allowed(lmf.row(first)[indices]))}},
-                after={feature: {'is': [], 'wannabe': _describe(
-                    members, allowed(lmf.row(second)[indices]))}},
-                context=shared_region(lmf, first, second, skip=(feature,))))
+    for i, j in only_on_pairs(lmf, feature, matrix).tolist():
+        if not changed(leaf_outcomes[i], leaf_outcomes[j]):
+            continue
+        flips.append(FeatureFlip(
+            feature=feature, from_leaf=ids[i], to_leaf=ids[j],
+            from_outcome=leaf_outcomes[i], to_outcome=leaf_outcomes[j],
+            before={feature: {'is': [], 'wannabe': _describe(members,
+                                                             allows[i])}},
+            after={feature: {'is': [], 'wannabe': _describe(members,
+                                                            allows[j])}},
+            context=_shared(lmf, groups_allowed, i, j, skip=(feature,),
+                            cache=cache)))
     return flips

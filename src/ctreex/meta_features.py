@@ -139,10 +139,15 @@ class LeafMetaFeatures(object):
 
     def leaf_index(self, leaf):
         """Row of the matrix describing a leaf."""
-        indices = np.flatnonzero(self.leaf_ids == leaf)
-        if indices.size != 1:
-            raise KeyError('Unknown leaf: {}.'.format(leaf))
-        return int(indices[0])
+        positions = self.__dict__.get('_positions')
+        if positions is None or len(positions) != self.leaf_ids.shape[0]:
+            positions = {int(leaf_id): i
+                         for i, leaf_id in enumerate(self.leaf_ids.tolist())}
+            self.__dict__['_positions'] = positions
+        try:
+            return positions[int(leaf)]
+        except (KeyError, TypeError, ValueError):
+            raise KeyError('Unknown leaf: {}.'.format(leaf)) from None
 
     def row(self, leaf):
         return self.matrix[self.leaf_index(leaf)]
@@ -333,6 +338,14 @@ def leaf_meta_features(paths, meta_features, spec=None):
     kinds = {m.feature: m.kind for m in meta_features}
     numerical_names = {m.feature for m in meta_features
                        if m.kind == NUMERICAL}
+    # the bounds of the numerical meta-features (unbounded: infinite)
+    bounds = {name: (np.array([-np.inf if meta_features[i].lower is None
+                               else meta_features[i].lower_value
+                               for i in by_feature[name]]),
+                     np.array([np.inf if meta_features[i].upper is None
+                               else meta_features[i].upper_value
+                               for i in by_feature[name]]))
+              for name in numerical_names}
 
     rows = np.zeros((len(paths), len(meta_features)), dtype=np.int8)
     for r, path in enumerate(paths):
@@ -357,15 +370,11 @@ def leaf_meta_features(paths, meta_features, spec=None):
                     raise ValueError('Expected a numerical feature, got '
                                      '{!r}.'.format(name))
                 lower, upper = _numerical_bounds(group)
-                for i in by_feature[name]:
-                    m = meta_features[i]
-                    if m.lower is None:  # lower spectrum
-                        row[i] = 1 if np.isinf(lower) else -1
-                    elif m.upper is None:  # upper spectrum
-                        row[i] = 1 if np.isinf(upper) else -1
-                    else:  # middle range
-                        row[i] = 1 if (lower <= m.lower_value
-                                       and m.upper_value <= upper) else -1
+                # the intervals inside the region of the path
+                lowers, uppers = bounds[name]
+                inside = (lower <= lowers) & (uppers <= upper)
+                for i, value in zip(by_feature[name], inside.tolist()):
+                    row[i] = 1 if value else -1
 
         # complete the description of every base feature
         for feature, members in by_feature.items():

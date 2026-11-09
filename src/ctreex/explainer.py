@@ -512,12 +512,15 @@ class TreeCounterfactualExplainer(object):
             max_size = max(len(p.conditions) for p in self.paths)
         targets = tgt.select_targets(explanation.target,
                                      self.target_context(explanation.leaf))
+        fixed = sup.fixed_consistency(self.leaf_meta_features,
+                                      explanation.meta_features)
         out = []
         for found in explanation.counterfactuals:
             for rank, change in found.ranked.items():
                 contexts = sup.contextualise_counterfactual(
                     self.leaf_meta_features, explanation.meta_features,
-                    explanation.instance_values, targets, change, max_size)
+                    explanation.instance_values, targets, change, max_size,
+                    fixed=fixed)
                 if not contexts:
                     raise ValueError(
                         'The counterfactual {} at distance {} has no context '
@@ -596,7 +599,8 @@ class TreeCounterfactualExplainer(object):
                 return before == positive and after != positive
         outputs = [_python(o) for o in self._leaf_outputs()]
         return audit.monotonicity_violations(
-            self.leaf_meta_features, feature, direction, outputs, worse)
+            self.leaf_meta_features, feature, direction, outputs, worse,
+            matrix=self.leaf_distance_matrix()[0])
 
     def feature_audit(self, feature, X=None, target=None, tolerance=None):
         """
@@ -643,7 +647,8 @@ class TreeCounterfactualExplainer(object):
                 return before != after
         outputs = [_python(o) for o in self._leaf_outputs()]
         flips = audit.feature_flips(self.leaf_meta_features, feature,
-                                    outputs, changed)
+                                    outputs, changed,
+                                    matrix=self.leaf_distance_matrix()[0])
         affected = set(f.from_leaf for f in flips)
         ids = self.leaf_meta_features.leaf_ids.tolist()
         result = audit.FeatureAudit(
@@ -845,7 +850,8 @@ class TreeCounterfactualExplainer(object):
         leaf_scores, aggregate = self._leaf_scores(rank_by, context)
 
         instance = mf.instance_meta_features(x, self.meta_features)
-        leaf_distances = distances.instance_leaf_distances(lmf, instance)
+        feature_distances = distances.group_distances(lmf, instance)
+        leaf_distances = feature_distances.sum(axis=1)
         support = cfs.support_set(leaf_distances, lmf.leaf_ids, targets)
 
         if max_distance is None:
@@ -856,7 +862,7 @@ class TreeCounterfactualExplainer(object):
                 per_leaf, per_feature = cfs.extract_counterfactuals(
                     lmf, instance, instance_values, support,
                     distance=distance, excluded=excluded, included=included,
-                    directions=directions)
+                    directions=directions, distances=feature_distances)
             except cfs.MissingDistance:  # no leaf this far from the point
                 continue
             outputs = {leaf: _python(self._leaf_outputs()[lmf.leaf_index(

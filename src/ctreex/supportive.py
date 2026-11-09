@@ -32,7 +32,7 @@ import itertools
 import numpy as np
 
 from ctreex import counterfactuals as cfs
-from ctreex.distances import allowed, exact_distance
+from ctreex.distances import allowed_rows, group_distances
 from ctreex.features import NUMERICAL
 
 __all__ = ['SupportiveExplanation', 'ContextualisedCounterfactual',
@@ -109,10 +109,9 @@ def fixed_consistency(lmf, instance):
         ``{feature: boolean mask over the leaves}`` -- the leaves whose
         region contains the meta-feature of the data point's value.
     """
-    return {feature: np.array([exact_distance(row[indices],
-                                              instance[indices]) == 0
-                               for row in lmf.matrix])
-            for _, feature, indices in lmf.groups}
+    distances = group_distances(lmf, instance)
+    return {feature: distances[:, j] == 0
+            for j, (_, feature, _) in enumerate(lmf.groups)}
 
 
 def _bound(value, unbounded):
@@ -153,8 +152,7 @@ def region_consistency(lmf, change):
             continue
         members = [lmf.meta_features[i] for i in indices]
         region = _region_mask(kind, members, change[feature]['wannabe'])
-        mask &= np.array([np.any(allowed(row[indices]) & region)
-                          for row in lmf.matrix])
+        mask &= (allowed_rows(lmf.matrix[:, indices]) & region).any(axis=1)
     return mask
 
 
@@ -277,30 +275,23 @@ def invariance_ranges(lmf, instance, instance_values, targets):
         for other, mask in fixed.items():
             if other != feature:
                 others &= mask
-        leaf_allows = np.array([allowed(row[indices]) for row in lmf.matrix])
-        kept = []
-        for position, i in enumerate(indices):
-            mask = others & leaf_allows[:, position]
-            if mask.any() and targets[mask].all():
-                kept.append(lmf.meta_features[i])
+        leaf_allows = allowed_rows(lmf.matrix[:, indices])
+        # leaves consistent with every meta-feature of the feature
+        consistent = others[:, None] & leaf_allows
+        kept = consistent.any(axis=0) & ~(consistent & ~targets[:, None])\
+            .any(axis=0)
+        members = [lmf.meta_features[i] for i in indices]
         if kind == NUMERICAL:
-            intervals = [(m.lower, m.upper) for m in kept]
-            wannabe = []
-            while intervals:
-                c = list(intervals.pop())
-                c, intervals = cfs.grow_region(c, intervals)
-                wannabe.append(c)
-            wannabe.sort(key=lambda c: -np.inf if c[0] is None
-                         else float(c[0]))
+            wannabe = cfs.mask_intervals(members, kept)
         else:
-            wannabe = [m.category for m in kept]
+            wannabe = [m.category for m, keep in zip(members, kept) if keep]
         ranges[feature] = {'is': [instance_values[feature]],
                            'wannabe': wannabe}
     return ranges
 
 
 def contextualise_counterfactual(lmf, instance, instance_values, targets,
-                                 change, max_size):
+                                 change, max_size, fixed=None):
     """
     All the smallest contexts of a counterfactual.
 
@@ -321,6 +312,9 @@ def contextualise_counterfactual(lmf, instance, instance_values, targets,
         The counterfactual (``{feature: {'is': [...], 'wannabe': [...]}}``).
     max_size : int
         The largest number of context features.
+    fixed : dict, optional
+        :func:`fixed_consistency` of the data point (computed when not given;
+        pass it to contextualise several counterfactuals of one data point).
 
     Returns
     -------
@@ -330,7 +324,8 @@ def contextualise_counterfactual(lmf, instance, instance_values, targets,
     """
     targets = np.asarray(targets, dtype=bool)
     base = region_consistency(lmf, change)
-    fixed = fixed_consistency(lmf, instance)
+    if fixed is None:
+        fixed = fixed_consistency(lmf, instance)
     candidates = [f for f in tested_features(lmf, base) if f not in change]
     return [({f: _condition(lmf, instance, instance_values, f)
               for f in subset}, lmf.leaf_ids[mask].tolist())
