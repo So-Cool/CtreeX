@@ -106,6 +106,38 @@
   the other arguments of `explain_instance` (except `target`) are passed on.
 * **Leaf targets.**
   `Leaves(*ids)` selects given leaves.
+* **Data points of counterfactuals.**
+  New `ctreex.points` module.
+  `TreeCounterfactualExplainer.counterfactual_point(x, counterfactual, how)`
+  returns the data point of a counterfactual nearest to `x` (`how='nearest'`)
+  or in the middle of its ranges (`how='midpoint'`) and
+  `sample_counterfactual(x, counterfactual, n, random_state)` draws data
+  points uniformly at random from its ranges (proportionally to their
+  lengths) and categories, with a seed;
+  e.g., to share a counterfactual without revealing the thresholds of the tree.
+  The features the counterfactual does not change keep the values of `x`;
+  both accept contextualised counterfactuals and check that every data point
+  reaches a leaf of the counterfactual.
+  Numerical values are 32-bit floating point numbers (whole numbers for
+  integer features), so scikit-learn and `TreeStructure` route them alike.
+* **Feature ranges and steps.**
+  `Feature` has optional `minimum` and `maximum` (bounding unbounded ranges
+  when sampling or taking their middle) and `step` (the smallest change of
+  a real-valued feature used by the nearest data point);
+  `FeatureSpec.fit_ranges(X)` sets the ranges of the numerical features from
+  data.
+* **Hidden thresholds.**
+  `describe(counterfactuals, hide_thresholds=True, random_state=...)`
+  replaces the ranges of numerical features with random values from them.
+* **Exemplars.**
+  `TreeCounterfactualExplainer.counterfactual_leaves(x, counterfactual)`
+  lists the leaves a counterfactual leads to
+  (`ctreex.supportive.counterfactual_leaves`) and
+  `exemplars(X, leaves, n, random_state)` returns the data points of `X` in
+  given leaves (at most `n`, drawn at random).
+* **Decoding.**
+  `TreeCounterfactualExplainer.decode(X)` returns the base feature values of
+  one data point or a list of them.
 
 ## 0.1.0
 

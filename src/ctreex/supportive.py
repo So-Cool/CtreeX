@@ -38,7 +38,8 @@ from ctreex.features import NUMERICAL
 __all__ = ['SupportiveExplanation', 'ContextualisedCounterfactual',
            'fixed_consistency', 'region_consistency', 'tested_features',
            'supportive_explanations', 'invariance_ranges',
-           'contextualise_counterfactual', 'matching_features']
+           'contextualise_counterfactual', 'matching_features',
+           'counterfactual_leaves']
 
 
 @dataclasses.dataclass
@@ -363,3 +364,29 @@ def matching_features(lmf, instance, change):
         if np.any(region & (instance[indices] == 1)):
             matching.append(feature)
     return [f for f in change if f in matching]
+
+
+def counterfactual_leaves(lmf, instance, change):
+    """
+    The leaves a counterfactual leads to.
+
+    Parameters
+    ----------
+    lmf : ctreex.meta_features.LeafMetaFeatures
+    instance : numpy.ndarray
+        Meta-features of the data point.
+    change : dict
+        A counterfactual (``{feature: {'is': [...], 'wannabe': [...]}}``).
+
+    Returns
+    -------
+    numpy.ndarray
+        Boolean mask over the leaves consistent with the changed features in
+        their counterfactual ranges and the other features at the values of
+        the data point.
+    """
+    mask = region_consistency(lmf, change)
+    for feature, consistent in fixed_consistency(lmf, instance).items():
+        if feature not in change:
+            mask &= consistent
+    return mask

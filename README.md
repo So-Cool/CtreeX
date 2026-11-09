@@ -155,6 +155,29 @@ With `same_leaf=True` they lead to the leaf of the reference instead, so the
 two data points may share their prediction;
 regression trees need a `tolerance` around the prediction of the reference.
 
+Counterfactuals describe regions -- ranges and sets of categories -- that
+can be turned into data points (`ctreex.points`):
+
+* `explainer.counterfactual_point(x, counterfactual)` -- the nearest data
+  point (`how='midpoint'` for the middle of the ranges);
+* `explainer.sample_counterfactual(x, counterfactual, n=5, random_state=0)`
+  -- data points drawn at random from the regions, e.g., to share a
+  counterfactual without revealing the thresholds of the tree; and
+* `explainer.describe(counterfactuals, hide_thresholds=True, random_state=0)`
+  -- descriptions with random values instead of the ranges of numerical
+  features.
+
+The features a counterfactual does not change keep the values of the data
+point and `explainer.decode(rows)` recovers the feature values.
+Unbounded ranges (e.g., "more than 20") need the minimum and maximum of the
+features, e.g., `spec.fit_ranges(X_train)` or
+`Feature('age', 'numerical', minimum=18, maximum=100)`;
+`Feature(..., step=0.01)` sets the smallest change of a real-valued feature.
+`explainer.counterfactual_leaves(x, counterfactual)` lists the leaves a
+counterfactual leads to and `explainer.exemplars(X_train, leaves, n=3)`
+returns data points from these leaves (beware that exemplars reveal real
+data points).
+
 Besides counterfactuals, CtreeX explains what *guarantees* a prediction
 (`ctreex.supportive`):
 
@@ -219,6 +242,7 @@ the same, e.g., `explainer.volatility_index(leaf, tolerance=50)`.
 |---|---|
 | `TreeCounterfactualExplainer(model, feature_spec, class_names)` | the explainer; `explain_instance(x, instance_values, max_distance, excluded, included, target, rank_by, directions)` returns a `CounterfactualExplanation`; `explain_contrast(x, x_reference, same_leaf, tolerance)` contrasts two data points |
 | `OtherClass`, `TargetClass`, `SameClass`, `ClassProbability`, `ValueChange`, `ValueAtLeast`, `ValueAtMost`, `ValueWithin`, `MinSamples`, `Leaves`, `AllOf`, `AnyOf`, `Not`, `Target` | the leaves the counterfactuals lead to (`ctreex.targets`) |
+| `counterfactual_point`, `sample_counterfactual`, `counterfactual_leaves`, `exemplars`, `decode` | data points of counterfactuals (`ctreex.points`) |
 | `feature_audit` | where a feature alone changes the prediction (`FeatureAudit`, `FeatureFlip`, `ctreex.audit`) |
 | `monotonicity_violations` | pairs of leaves where changing a feature in a direction makes the prediction worse (`MonotonicityViolation`, `ctreex.audit`) |
 | `supportive_explanations`, `invariance_ranges`, `contextualise` | what guarantees a prediction (`SupportiveExplanation`, `ContextualisedCounterfactual`, `ctreex.supportive`) |

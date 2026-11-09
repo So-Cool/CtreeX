@@ -48,6 +48,17 @@ class Feature(object):
         (``explain_instance(..., directions=...)``) and audited for
         monotonicity.
         Numerical features are always ordered.
+    minimum, maximum : float, optional
+        The range of a numerical feature;
+        it bounds unbounded counterfactual ranges (e.g., "more than 20") when
+        sampling data points or taking the middle of a range
+        (see :meth:`FeatureSpec.fit_ranges` and :mod:`ctreex.points`).
+    step : float, optional
+        The smallest meaningful change of a real-valued numerical feature,
+        e.g., ``0.01`` for prices;
+        the nearest data point of a counterfactual "more than ``t``" takes
+        ``t + step`` (the smallest 32-bit number above ``t`` by default;
+        whole numbers for integer features).
     """
     name: str
     kind: str
@@ -56,12 +67,27 @@ class Feature(object):
     value_names: dict = dataclasses.field(default_factory=dict)
     integer: bool = False
     ordered: bool = False
+    minimum: float = None
+    maximum: float = None
+    step: float = None
 
     def __post_init__(self):
         if self.kind not in (NUMERICAL, CATEGORICAL):
             raise ValueError('Unknown feature kind: {!r}.'.format(self.kind))
         if self.integer and self.kind != NUMERICAL:
             raise ValueError('Only numerical features can be integers.')
+        if self.kind != NUMERICAL and any(
+                v is not None for v in (self.minimum, self.maximum,
+                                        self.step)):
+            raise ValueError('Only numerical features have a minimum, a '
+                             'maximum and a step.')
+        if (self.minimum is not None and self.maximum is not None
+                and self.minimum > self.maximum):
+            raise ValueError('The minimum of {!r} exceeds its maximum.'
+                             ''.format(self.name))
+        if self.step is not None and not self.step > 0:
+            raise ValueError('The step of {!r} has to be positive.'.format(
+                self.name))
         if self.ordered and self.kind != CATEGORICAL:
             raise ValueError('Only categorical features can be ordered '
                              '(numerical features always are).')
@@ -194,6 +220,31 @@ class FeatureSpec(object):
             elif row[j] == 1:
                 values[name] = category
         return values
+
+    def fit_ranges(self, X):
+        """
+        Sets the minimum and maximum of every numerical feature from data.
+
+        Parameters
+        ----------
+        X : array-like
+            One-hot encoded data points, e.g., the training data.
+
+        Returns
+        -------
+        FeatureSpec
+            This specification (changed in place).
+        """
+        import numpy as np
+        X = val.check_array_2d(X, self.n_columns).astype(np.float64)
+        for j, (name, category) in enumerate(self.columns):
+            if category is None:
+                column = X[:, j][~np.isnan(X[:, j])]
+                if column.size:
+                    feature = self.features[name]
+                    feature.minimum = float(column.min())
+                    feature.maximum = float(column.max())
+        return self
 
     def encode(self, values):
         """One-hot encodes a dictionary of base feature values."""

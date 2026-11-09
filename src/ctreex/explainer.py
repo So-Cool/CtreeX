@@ -27,6 +27,7 @@ from ctreex import distances
 from ctreex import meta_features as mf
 from ctreex import _validation as val
 from ctreex import audit
+from ctreex import points
 from ctreex import supportive as sup
 from ctreex import targets as tgt
 from ctreex.features import NUMERICAL, FeatureSpec
@@ -882,7 +883,8 @@ class TreeCounterfactualExplainer(object):
             support=support, counterfactuals=found, target=target,
             task=self.task)
 
-    def describe(self, counterfactuals, integer_ranges=False):
+    def describe(self, counterfactuals, integer_ranges=False,
+                 hide_thresholds=False, random_state=None):
         """
         Human-readable version of counterfactuals (see
         :func:`ctreex.counterfactuals.describe_counterfactuals`).
@@ -890,6 +892,200 @@ class TreeCounterfactualExplainer(object):
         Thresholds are shown in their shortest form
         (:func:`ctreex.counterfactuals.format_bound`), e.g.,
         ``'more than 0.8'`` instead of ``'more than 0.800000011920929'``.
+
+        Parameters
+        ----------
+        counterfactuals : dict
+            ``{key: {feature: {'is': [...], 'wannabe': [...]}}}``.
+        integer_ranges : bool
+            Describe the ranges of integer features with whole numbers.
+        hide_thresholds : bool
+            Replace the ranges of numerical features with a value drawn at
+            random from them (:func:`ctreex.points.sample_value`), so the
+            description does not reveal the thresholds of the tree;
+            unbounded ranges need the minimum and maximum of the features
+            (``FeatureSpec.fit_ranges``).
+        random_state : int or numpy.random.Generator, optional
+            The seed (generator) of ``hide_thresholds``.
         """
+        if hide_thresholds:
+            rng = np.random.default_rng(random_state)
+            hidden = {}
+            for key, changes in counterfactuals.items():
+                hidden[key] = {}
+                for name, part in changes.items():
+                    feature = self.spec.features[name]
+                    if feature.kind == NUMERICAL:
+                        value = points.sample_value(feature, part['wannabe'],
+                                                    rng)
+                        hidden[key][feature.display_name] = {
+                            'is': list(part['is']), 'wannabe': [value]}
+                    else:
+                        hidden[key][feature.display_name] = cfs\
+                            .describe_counterfactuals(
+                                {0: {name: part}}, self.spec)[0][
+                                    feature.display_name]
+            return hidden
         return cfs.describe_counterfactuals(
             counterfactuals, self.spec, integer_ranges=integer_ranges)
+
+    def decode(self, X):
+        """
+        Base feature values of one-hot encoded data points (see
+        :meth:`ctreex.features.FeatureSpec.decode`).
+
+        Returns
+        -------
+        dict or list of dict
+            One dictionary for a single data point, a list for a 2-D array.
+        """
+        X = np.asarray(X)
+        if X.ndim == 1:
+            return self.spec.decode(X)
+        return [self.spec.decode(row) for row in X]
+
+    @staticmethod
+    def _change(counterfactual):
+        """The changes of a counterfactual or a contextualised one."""
+        if isinstance(counterfactual, sup.ContextualisedCounterfactual):
+            return counterfactual.change
+        if not isinstance(counterfactual, dict):
+            raise TypeError('Expected a counterfactual '
+                            "({{feature: {{'is': ..., 'wannabe': ...}}}}) or "
+                            'a ContextualisedCounterfactual; got {!r}.'.format(
+                                counterfactual))
+        return counterfactual
+
+    def counterfactual_leaves(self, x, counterfactual):
+        """
+        The leaves a counterfactual of a data point leads to, i.e., the leaves
+        consistent with the changed features in their ranges and the other
+        features at the values of the data point.
+
+        Parameters
+        ----------
+        x : array-like
+            One-hot encoded data point.
+        counterfactual : dict or ctreex.supportive.ContextualisedCounterfactual
+
+        Returns
+        -------
+        list of int
+        """
+        x, _, _, instance = self._prepare(x, None)
+        mask = sup.counterfactual_leaves(self.leaf_meta_features, instance,
+                                         self._change(counterfactual))
+        return self.leaf_meta_features.leaf_ids[mask].tolist()
+
+    def _check_points(self, x, counterfactual, rows):
+        """Every data point has to reach a leaf of the counterfactual."""
+        expected = set(self.counterfactual_leaves(x, counterfactual))
+        reached = self.tree.apply(rows)
+        if not set(reached.tolist()) <= expected:  # pragma: no cover
+            raise RuntimeError('Internal error: a data point of the '
+                               'counterfactual reaches leaf {} instead of '
+                               '{}.'.format(sorted(set(reached.tolist()) -
+                                                   expected),
+                                            sorted(expected)))
+
+    def counterfactual_point(self, x, counterfactual, how='nearest'):
+        """
+        A data point satisfying a counterfactual (see
+        :func:`ctreex.points.counterfactual_point`).
+
+        Parameters
+        ----------
+        x : array-like
+            One-hot encoded data point.
+        counterfactual : dict or ctreex.supportive.ContextualisedCounterfactual
+            E.g., ``explanation.at_distance(1).ranked[0]``.
+        how : {'nearest', 'midpoint'}
+            The values of the changed features nearest to the data point or
+            in the middle of their ranges (unbounded ranges need the minimum
+            and maximum of the features);
+            the other features keep the values of the data point.
+
+        Returns
+        -------
+        numpy.ndarray
+            One-hot encoded data point (see :meth:`decode`).
+        """
+        x, _, _, _ = self._prepare(x, None)
+        row = points.counterfactual_point(self.spec, x,
+                                          self._change(counterfactual), how)
+        self._check_points(x, counterfactual, row.reshape(1, -1))
+        return row
+
+    def sample_counterfactual(self, x, counterfactual, n=1,
+                              random_state=None):
+        """
+        Data points drawn at random from a counterfactual (see
+        :func:`ctreex.points.sample_counterfactual`), e.g., to share a
+        counterfactual without revealing the thresholds of the tree.
+
+        Every changed feature is drawn uniformly from its ranges (unbounded
+        ranges need the minimum and maximum of the features, see
+        ``FeatureSpec.fit_ranges``) or categories;
+        the other features keep the values of the data point.
+
+        Parameters
+        ----------
+        x : array-like
+            One-hot encoded data point.
+        counterfactual : dict or ctreex.supportive.ContextualisedCounterfactual
+            E.g., ``explanation.at_distance(1).ranked[0]``.
+        n : int
+            The number of data points.
+        random_state : int or numpy.random.Generator, optional
+            The seed (generator), for reproducible samples.
+
+        Returns
+        -------
+        numpy.ndarray
+            ``(n, n_columns)`` one-hot encoded data points
+            (see :meth:`decode`).
+        """
+        if isinstance(n, bool) or not isinstance(n, (int, np.integer)) \
+                or n < 1:
+            raise ValueError('n has to be a positive integer.')
+        x, _, _, _ = self._prepare(x, None)
+        rows = points.sample_counterfactual(
+            self.spec, x, self._change(counterfactual), int(n),
+            np.random.default_rng(random_state))
+        self._check_points(x, counterfactual, rows)
+        return rows
+
+    def exemplars(self, X, leaves, n=None, random_state=None):
+        """
+        Data points (e.g., training data) that fall into given leaves.
+
+        Exemplars illustrate a leaf -- e.g., the leaves of a counterfactual
+        (:meth:`counterfactual_leaves`) -- with real data points;
+        beware that they reveal these data points.
+
+        Parameters
+        ----------
+        X : array-like
+            One-hot encoded data points.
+        leaves : int or list of int
+        n : int, optional
+            Draw at most ``n`` of them at random (all by default).
+        random_state : int or numpy.random.Generator, optional
+
+        Returns
+        -------
+        numpy.ndarray
+            The data points (rows of ``X``, in their order).
+        """
+        X = val.check_array_2d(X, self.spec.n_columns)
+        leaves = [leaves] if np.ndim(leaves) == 0 else list(leaves)
+        known = set(self.leaf_meta_features.leaf_ids.tolist())
+        unknown = [leaf for leaf in leaves if leaf not in known]
+        if unknown:
+            raise ValueError('These nodes are not leaves: {}.'.format(
+                ', '.join(map(str, unknown))))
+        indices = np.flatnonzero(np.isin(self.tree.apply(X), leaves))
+        if n is not None and n < indices.size:
+            rng = np.random.default_rng(random_state)
+            indices = np.sort(rng.choice(indices, size=n, replace=False))
+        return X[indices]
