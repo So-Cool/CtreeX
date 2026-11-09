@@ -122,10 +122,21 @@ Regression trees need a target:
 `explanation.ranked(with_values=True)` reports the predictions each
 counterfactual leads to.
 
+`MinSamples(20)` selects leaves with at least 20 training samples
+(trees built from scikit-learn store them).
+Targets combine with `&`, `|` and `~`, e.g., `OtherClass() & MinSamples(20)`
+leads to leaves of another class backed by at least 20 training samples.
+
 Custom targets subclass `ctreex.Target` and implement `select(context)`,
-which returns a boolean mask over the leaves given the prediction and the
-classes and class proportions -- or the values -- of all the leaves
+which returns a boolean mask over the leaves given the prediction as well as
+the classes and class proportions -- or the values -- of all the leaves and
+their numbers of training samples and impurity
 (`ctreex.targets.TargetContext`).
+
+At every distance, counterfactuals are ordered by how many target leaves need
+their features to change (`rank_by='frequency'`, the default),
+by the number of training samples of their leaves (`rank_by='samples'`) or
+by the purity of their leaves (`rank_by='purity'`).
 
 The leaf-to-leaf distance matrix (`explainer.leaf_distance_matrix()`), its
 heat map and histograms (`ctreex.plot`) and the *volatility index* of a leaf
@@ -145,11 +156,11 @@ the same, e.g., `explainer.volatility_index(leaf, tolerance=50)`.
 
 | Object | Purpose |
 |---|---|
-| `TreeCounterfactualExplainer(model, feature_spec, class_names)` | the explainer; `explain_instance(x, instance_values, max_distance, excluded, included, target)` returns a `CounterfactualExplanation` |
-| `OtherClass`, `TargetClass`, `SameClass`, `ClassProbability`, `ValueChange`, `ValueAtLeast`, `ValueAtMost`, `ValueWithin`, `Target` | the leaves the counterfactuals lead to (`ctreex.targets`) |
+| `TreeCounterfactualExplainer(model, feature_spec, class_names)` | the explainer; `explain_instance(x, instance_values, max_distance, excluded, included, target, rank_by)` returns a `CounterfactualExplanation` |
+| `OtherClass`, `TargetClass`, `SameClass`, `ClassProbability`, `ValueChange`, `ValueAtLeast`, `ValueAtMost`, `ValueWithin`, `MinSamples`, `AllOf`, `AnyOf`, `Not`, `Target` | the leaves the counterfactuals lead to (`ctreex.targets`) |
 | `CounterfactualExplanation` | `prediction`, `leaf`, `target`, `leaf_distances`, `support` (target and other leaves per distance), `counterfactuals` (one `DistanceCounterfactuals` per distance), `ranked()`, `at_distance(d)` |
 | `FeatureSpec`, `Feature` | maps the columns of a one-hot encoded array to features; display names and category names; `encode`/`decode` |
-| `TreeStructure`, `load_tree` | a fitted tree independent of scikit-learn: from scikit-learn, to/from JSON, from pickles |
+| `TreeStructure`, `load_tree` | a fitted tree independent of scikit-learn: from scikit-learn, to/from JSON, from pickles; optional training statistics (`n_node_samples`, `weighted_n_node_samples`, `impurity`) |
 | `ctreex.sklearn_tools` | Graphviz, text and matplotlib representations of scikit-learn trees, root-to-leaf paths |
 | `ctreex.plot` | heat map, bar plot and histogram of leaf distances (`plot` extra) |
 

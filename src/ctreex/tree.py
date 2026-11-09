@@ -25,6 +25,8 @@ JSON_FORMAT_VERSION = 2
 CLASSIFICATION = 'classification'
 REGRESSION = 'regression'
 TASKS = (CLASSIFICATION, REGRESSION)
+#: optional training statistics of the nodes
+STATISTICS = ('n_node_samples', 'weighted_n_node_samples', 'impurity')
 
 
 class TreeStructure(object):
@@ -61,13 +63,23 @@ class TreeStructure(object):
         Where missing values (``nan``) go at every split node -- learnt by
         scikit-learn 1.3 or newer. When not given, missing values go to the
         right child (as with scikit-learn trees trained without them).
+    n_node_samples : array-like of int, optional
+        The number of training samples in every node.
+    weighted_n_node_samples : array-like of float, optional
+        The total weight of the training samples in every node.
+    impurity : array-like of float, optional
+        The impurity of every node (e.g., Gini or entropy for classifiers and
+        the mean squared error for regressors).
+
+    The training statistics are optional; :meth:`from_sklearn` stores them.
 
     Multi-output trees are not supported.
     """
 
     def __init__(self, children_left, children_right, feature, threshold,
                  value, classes=None, n_features=None, feature_names=None,
-                 metadata=None, missing_go_to_left=None):
+                 metadata=None, missing_go_to_left=None, n_node_samples=None,
+                 weighted_n_node_samples=None, impurity=None):
         self.children_left = np.asarray(children_left, dtype=np.int64)
         self.children_right = np.asarray(children_right, dtype=np.int64)
         self.feature = np.asarray(feature, dtype=np.int64)
@@ -90,6 +102,17 @@ class TreeStructure(object):
                 and self.missing_go_to_left.shape[0] != n_nodes):
             raise ValueError('missing_go_to_left has to describe {} '
                              'nodes.'.format(n_nodes))
+        for name, values, dtype in (
+                ('n_node_samples', n_node_samples, np.int64),
+                ('weighted_n_node_samples', weighted_n_node_samples,
+                 np.float64),
+                ('impurity', impurity, np.float64)):
+            if values is not None:
+                values = np.asarray(values, dtype=dtype)
+                if values.shape != (n_nodes,):
+                    raise ValueError('{} has to describe {} nodes.'.format(
+                        name, n_nodes))
+            setattr(self, name, values)
         for name in ('children_right', 'feature', 'threshold', 'value'):
             if getattr(self, name).shape[0] != n_nodes:
                 raise ValueError('All the tree arrays have to describe {} '
@@ -146,7 +169,10 @@ class TreeStructure(object):
                    n_features=tree.n_features, feature_names=feature_names,
                    metadata=meta,
                    missing_go_to_left=getattr(tree, 'missing_go_to_left',
-                                              None))
+                                              None),
+                   n_node_samples=tree.n_node_samples,
+                   weighted_n_node_samples=tree.weighted_n_node_samples,
+                   impurity=tree.impurity)
 
     @classmethod
     def from_dict(cls, d):
@@ -161,7 +187,7 @@ class TreeStructure(object):
         metadata = {k: v for k, v in d.items() if k not in (
             'format', 'format_version', 'task', 'children_left',
             'children_right', 'feature', 'threshold', 'value', 'classes',
-            'n_features', 'feature_names', 'missing_go_to_left')}
+            'n_features', 'feature_names', 'missing_go_to_left') + STATISTICS}
         classes = d['classes'] if task == CLASSIFICATION else None
         if task == CLASSIFICATION and classes is None:
             raise ValueError('Classification trees need classes.')
@@ -169,7 +195,8 @@ class TreeStructure(object):
                    d['threshold'], d['value'], classes,
                    n_features=d.get('n_features'),
                    feature_names=d.get('feature_names'), metadata=metadata,
-                   missing_go_to_left=d.get('missing_go_to_left'))
+                   missing_go_to_left=d.get('missing_go_to_left'),
+                   **{name: d.get(name) for name in STATISTICS})
 
     def to_dict(self):
         d = {'format': JSON_FORMAT, 'format_version': JSON_FORMAT_VERSION,
@@ -185,6 +212,9 @@ class TreeStructure(object):
              'value': self.value.tolist()}
         if self.missing_go_to_left is not None:
             d['missing_go_to_left'] = self.missing_go_to_left.tolist()
+        for name in STATISTICS:
+            if getattr(self, name) is not None:
+                d[name] = getattr(self, name).tolist()
         d.update(self.metadata)
         return d
 

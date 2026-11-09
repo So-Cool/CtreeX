@@ -346,10 +346,47 @@ class TreeCounterfactualExplainer(object):
             leaf_probabilities=self._leaf_probabilities,
             classes=(None if self._class_labels is None
                      else list(self._class_labels)),
-            task=self.task, leaf_values=lmf.leaf_values)
+            task=self.task, leaf_values=lmf.leaf_values,
+            leaf_samples=self._leaf_statistic('n_node_samples'),
+            leaf_impurity=self._leaf_statistic('impurity'))
+
+    def _leaf_statistic(self, name):
+        """A training statistic of every leaf (``None`` if not stored)."""
+        values = getattr(self.tree, name)
+        return None if values is None \
+            else values[self.leaf_meta_features.leaf_ids]
+
+    def _leaf_scores(self, rank_by, context):
+        """``{leaf id: score}`` (higher is better) and how to aggregate the
+        scores of merged counterfactuals, or ``None`` for ``frequency``."""
+        if rank_by == 'frequency':
+            return None, None
+        if rank_by == 'samples':
+            if context.leaf_samples is None:
+                raise ValueError("rank_by='samples' needs the number of "
+                                 'training samples of the leaves '
+                                 '(n_node_samples).')
+            scores = context.leaf_samples
+            aggregate = sum
+        elif rank_by == 'purity':
+            if self.task == REGRESSION:
+                if context.leaf_impurity is None:
+                    raise ValueError("rank_by='purity' needs the impurity of "
+                                     'the leaves of regression trees.')
+                scores = -context.leaf_impurity
+            else:
+                scores = context.leaf_probabilities.max(axis=1)
+            aggregate = min
+        else:
+            raise ValueError("rank_by has to be 'frequency', 'samples' or "
+                             "'purity'; got {!r}.".format(rank_by))
+        return ({int(leaf): float(score)
+                 for leaf, score in zip(context.leaf_ids, scores)},
+                aggregate)
 
     def explain_instance(self, x, instance_values=None, max_distance=None,
-                         excluded=(), included=(), target=None):
+                         excluded=(), included=(), target=None,
+                         rank_by='frequency'):
         """
         Computes the counterfactuals of a data point.
 
@@ -386,6 +423,17 @@ class TreeCounterfactualExplainer(object):
         target : ctreex.targets.Target, optional
             Selects the leaves the counterfactuals lead to
             (default: ``OtherClass()``; required for regression trees).
+        rank_by : {'frequency', 'samples', 'purity'}
+            Orders the counterfactuals at every distance:
+            ``'frequency'`` (default) by how many target leaves need their
+            features to change;
+            ``'samples'`` by the number of training samples of their leaves
+            (the total of the merged leaves, needs ``n_node_samples``); and
+            ``'purity'`` by the purity of their leaves -- the proportion of
+            the majority class or the impurity of regression leaves (lower
+            first, needs ``impurity``) -- taking the least pure of the merged
+            leaves.
+            Ties keep the ``'frequency'`` order.
 
         Returns
         -------
@@ -410,6 +458,7 @@ class TreeCounterfactualExplainer(object):
         context = self.target_context(leaf)
         prediction = context.prediction
         targets = tgt.select_targets(target, context)
+        leaf_scores, aggregate = self._leaf_scores(rank_by, context)
 
         instance = mf.instance_meta_features(x, self.meta_features)
         leaf_distances = distances.instance_leaf_distances(lmf, instance)
@@ -430,7 +479,8 @@ class TreeCounterfactualExplainer(object):
             # merged and scored per class (per value for regression trees)
             ranked, sources = cfs.rank_counterfactuals(
                 per_leaf, per_feature, distance, leaf_classes=outputs,
-                return_sources=True)
+                return_sources=True, leaf_scores=leaf_scores,
+                aggregate=aggregate)
             if self.task == REGRESSION:
                 reported = {'leaf_values': outputs, 'ranked_values': {
                     rank: (min(outputs[leaf] for leaf in leaves),

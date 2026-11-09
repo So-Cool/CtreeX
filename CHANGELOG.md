@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.1.1 (unreleased)
+
+* **Training statistics.**
+  `TreeStructure` stores the number of training samples
+  (`n_node_samples`), their total weight (`weighted_n_node_samples`) and the
+  `impurity` of every node;
+  `from_sklearn` fills them in and the JSON format (version 2) records them
+  when present.
+  They are optional, e.g., for hand-built trees and older files.
+  `TargetContext` gains `leaf_samples` and `leaf_impurity`.
+* **Combinable targets.**
+  Targets combine with `&` (`AllOf`), `|` (`AnyOf`) and `~` (`Not`);
+  e.g., `OtherClass() & MinSamples(20)`.
+* **Leaves backed by enough data.**
+  `MinSamples(n)` selects leaves with at least `n` training samples.
+* **Ranking options.**
+  `explain_instance(..., rank_by=...)` orders the counterfactuals at every
+  distance by feature frequency (`'frequency'`, the default and the previous
+  behaviour), the number of training samples of their leaves (`'samples'`,
+  the total for merged counterfactuals) or the purity of their leaves
+  (`'purity'`, the majority proportion, or the lowest impurity
+  for regression trees, of the least pure merged leaf);
+  ties keep the frequency order.
+  `rank_counterfactuals` takes the corresponding `leaf_scores` and
+  `aggregate`.
+
 ## 0.1.0
 
 * **The legacy implementation is removed.**

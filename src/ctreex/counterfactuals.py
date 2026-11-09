@@ -341,7 +341,8 @@ def _merge(per_leaf, leaves, feature):
 
 
 def rank_counterfactuals(per_leaf, per_feature, distance, leaf_classes=None,
-                         return_sources=False):
+                         return_sources=False, leaf_scores=None,
+                         aggregate=sum):
     """
     Orders counterfactuals by importance.
 
@@ -363,6 +364,13 @@ def rank_counterfactuals(per_leaf, per_feature, distance, leaf_classes=None,
         Without it all leaves are treated as one class.
     return_sources : bool
         Also return the leaves every ranked counterfactual comes from.
+    leaf_scores : dict, optional
+        ``{leaf id: score}``; when given, counterfactuals are ordered by the
+        scores of their leaves (higher first), combined with ``aggregate``
+        for merged counterfactuals and the feature scores break ties.
+    aggregate : callable
+        Combines the scores of the leaves of a merged counterfactual
+        (e.g., ``sum`` or ``min``).
 
     Returns
     -------
@@ -381,17 +389,23 @@ def rank_counterfactuals(per_leaf, per_feature, distance, leaf_classes=None,
             groups.setdefault((class_of(leaf), feature), []).append(leaf)
     frequency = {key: len(leaves) for key, leaves in groups.items()}
 
+    def scored(score, leaves):
+        if leaf_scores is None:
+            return (score,)
+        return (aggregate(leaf_scores[leaf] for leaf in leaves), score)
+
     counterfactuals, sources = {}, {}
     if distance == 1:
-        order = sorted([(frequency[key], key) for key in frequency],
+        order = sorted([(scored(frequency[key], groups[key]), key)
+                        for key in frequency],
                        key=lambda x: x[0], reverse=True)
         for counter, (_, key) in enumerate(order):
             counterfactuals[counter] = _merge(per_leaf, groups[key], key[1])
             sources[counter] = list(groups[key])
     else:
         logger.debug('Feature frequencies: %s', frequency)
-        importance = [(sum(frequency[(class_of(leaf), f)]
-                           for f in per_leaf[leaf]), leaf)
+        importance = [(scored(sum(frequency[(class_of(leaf), f)]
+                                  for f in per_leaf[leaf]), [leaf]), leaf)
                       for leaf in per_leaf]
         for counter, (_, leaf) in enumerate(
                 sorted(importance, key=lambda x: x[0], reverse=True)):

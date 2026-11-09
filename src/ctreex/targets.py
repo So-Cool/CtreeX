@@ -26,6 +26,16 @@ Regression trees (a target has to be given):
   of the data point by at most a given tolerance, i.e., the changes that
   (approximately) keep the prediction.
 
+Any tree:
+
+* :class:`MinSamples` -- leaves with at least a given number of training
+  samples (trees that store them, e.g., built from scikit-learn).
+
+Targets combine with ``&`` for both, ``|`` for either and ``~`` for not;
+e.g., ``OtherClass() & MinSamples(20)`` leads to leaves of another class
+backed by at least 20 training samples
+(see :class:`AllOf`, :class:`AnyOf` and :class:`Not`).
+
 Custom targets subclass :class:`Target` and implement :meth:`Target.select`,
 which receives a :class:`TargetContext` describing the prediction and all
 the leaves and returns a boolean mask over the leaves;
@@ -49,7 +59,8 @@ from ctreex.tree import CLASSIFICATION, REGRESSION
 
 __all__ = ['TargetContext', 'Target', 'OtherClass', 'TargetClass',
            'SameClass', 'ClassProbability', 'ValueChange', 'ValueAtLeast',
-           'ValueAtMost', 'ValueWithin', 'select_targets']
+           'ValueAtMost', 'ValueWithin', 'MinSamples', 'AllOf', 'AnyOf',
+           'Not', 'select_targets']
 
 _CLASSIFICATION_TARGETS = 'OtherClass, TargetClass, SameClass or ' \
     'ClassProbability'
@@ -84,6 +95,12 @@ class TargetContext(object):
         The kind of the tree.
     leaf_values : numpy.ndarray or None
         The prediction of every leaf (regression trees).
+    leaf_samples : numpy.ndarray or None
+        The number of training samples in every leaf
+        (``None`` when the tree does not store it).
+    leaf_impurity : numpy.ndarray or None
+        The impurity of every leaf
+        (``None`` when the tree does not store it).
     """
     prediction: object
     leaf: int
@@ -93,6 +110,8 @@ class TargetContext(object):
     classes: list
     task: str = CLASSIFICATION
     leaf_values: np.ndarray = None
+    leaf_samples: np.ndarray = None
+    leaf_impurity: np.ndarray = None
 
 
 def _require(target, context, task):
@@ -133,7 +152,18 @@ class Target(object):
     Base class of targets.
 
     Subclasses implement :meth:`select` and may implement :meth:`validate`.
+    Targets combine with ``&`` (:class:`AllOf`), ``|`` (:class:`AnyOf`) and
+    ``~`` (:class:`Not`).
     """
+
+    def __and__(self, other):
+        return AllOf(self, other)
+
+    def __or__(self, other):
+        return AnyOf(self, other)
+
+    def __invert__(self):
+        return Not(self)
 
     def validate(self, context):
         """
@@ -358,6 +388,129 @@ class ValueWithin(Target):
             <= self.tolerance
 
 
+@dataclasses.dataclass(frozen=True)
+class MinSamples(Target):
+    """
+    Leaves with at least ``n`` training samples.
+
+    The tree has to store the number of training samples of its nodes
+    (``TreeStructure.n_node_samples``, e.g., trees built from scikit-learn).
+    Combine it with another target, e.g., ``OtherClass() & MinSamples(20)``.
+
+    Attributes
+    ----------
+    n : int
+        The smallest number of training samples (positive).
+    """
+    n: int
+
+    def __post_init__(self):
+        if isinstance(self.n, bool) or not isinstance(
+                self.n, (int, np.integer)) or self.n < 1:
+            raise ValueError('n has to be a positive integer; got '
+                             '{!r}.'.format(self.n))
+
+    def validate(self, context):
+        if context.leaf_samples is None:
+            raise ValueError('The tree does not store the number of training '
+                             'samples of its leaves (n_node_samples).')
+
+    def select(self, context):
+        return context.leaf_samples >= self.n
+
+
+def _targets(name, targets):
+    if not targets:
+        raise TypeError('{} needs at least one target.'.format(name))
+    for target in targets:
+        if not isinstance(target, Target):
+            raise TypeError('{} combines targets; got {!r}.'.format(
+                name, target))
+    return tuple(targets)
+
+
+@dataclasses.dataclass(frozen=True, init=False)
+class AllOf(Target):
+    """
+    Leaves selected by all the targets (``a & b``).
+
+    Attributes
+    ----------
+    targets : tuple of Target
+    """
+    targets: tuple
+
+    def __init__(self, *targets):
+        object.__setattr__(self, 'targets', _targets('AllOf', targets))
+
+    def validate(self, context):
+        for target in self.targets:
+            target.validate(context)
+
+    def select(self, context):
+        mask = np.ones(context.leaf_ids.shape, dtype=bool)
+        for target in self.targets:
+            mask &= _mask(target, context)
+        return mask
+
+
+@dataclasses.dataclass(frozen=True, init=False)
+class AnyOf(Target):
+    """
+    Leaves selected by any of the targets (``a | b``).
+
+    Attributes
+    ----------
+    targets : tuple of Target
+    """
+    targets: tuple
+
+    def __init__(self, *targets):
+        object.__setattr__(self, 'targets', _targets('AnyOf', targets))
+
+    def validate(self, context):
+        for target in self.targets:
+            target.validate(context)
+
+    def select(self, context):
+        mask = np.zeros(context.leaf_ids.shape, dtype=bool)
+        for target in self.targets:
+            mask |= _mask(target, context)
+        return mask
+
+
+@dataclasses.dataclass(frozen=True)
+class Not(Target):
+    """
+    Leaves not selected by a target (``~a``).
+
+    Attributes
+    ----------
+    target : Target
+    """
+    target: Target
+
+    def __post_init__(self):
+        _targets('Not', (self.target,))
+
+    def validate(self, context):
+        self.target.validate(context)
+
+    def select(self, context):
+        return ~_mask(self.target, context)
+
+
+def _mask(target, context):
+    """Selects the leaves of a (validated) target and checks the mask."""
+    mask = np.asarray(target.select(context))
+    if mask.dtype != bool or mask.shape != context.leaf_ids.shape:
+        raise ValueError('{!r}.select has to return a boolean array with one '
+                         'value per leaf ({}); got {} of shape {}.'.format(
+                             target, context.leaf_ids.shape[0], mask.dtype,
+                             mask.shape))
+    return mask
+
+
 def select_targets(target, context):
     """
     Validates a target and selects its leaves.
@@ -377,10 +530,4 @@ def select_targets(target, context):
                         'OtherClass(), TargetClass(...), SameClass() or '
                         'ValueChange(...)); got {!r}.'.format(target))
     target.validate(context)
-    mask = np.asarray(target.select(context))
-    if mask.dtype != bool or mask.shape != context.leaf_ids.shape:
-        raise ValueError('{!r}.select has to return a boolean array with one '
-                         'value per leaf ({}); got {} of shape {}.'.format(
-                             target, context.leaf_ids.shape[0], mask.dtype,
-                             mask.shape))
-    return mask
+    return _mask(target, context)
