@@ -90,6 +90,22 @@
   whose closest counterfactuals involve the feature (`closest`).
   Regression trees need a `tolerance` (leaf predictions that differ by more
   than it are different) and, with data, a `target`.
+* **Instance-contrastive explanations.**
+  `TreeCounterfactualExplainer.explain_contrast(x, x_reference, same_leaf, tolerance, **kwargs)`
+  explains how `x` would have to change to be treated like `x_reference`:
+  the counterfactuals lead to the class of the reference (`TargetClass`),
+  to the leaves predicting at most `tolerance` more or less than it
+  (regression trees, `tolerance` required) or, with `same_leaf=True`, to its
+  leaf;
+  at every distance, those whose new values include the values of the
+  reference come first and `DistanceCounterfactuals.reference_matches` lists
+  these features.
+  `CounterfactualExplanation.reference` holds the values of the reference.
+  Data points with the same outcome (without `same_leaf`) or the same leaf
+  raise `ValueError`;
+  the other arguments of `explain_instance` (except `target`) are passed on.
+* **Leaf targets.**
+  `Leaves(*ids)` selects given leaves.
 
 ## 0.1.0
 

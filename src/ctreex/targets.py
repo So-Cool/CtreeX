@@ -11,8 +11,8 @@ Classification trees:
 * :class:`TargetClass` -- leaves of one or more given classes (multi-class
   trees);
 * :class:`SameClass` -- other leaves of the predicted class, i.e.,
-  *class-equivalent* explanations:
-  the changes that keep the prediction; and
+  *class-equivalent* explanations, which show changes that keep the
+  prediction; and
 * :class:`ClassProbability` -- leaves of given classes whose majority is at
   least a given proportion (confident leaves).
 
@@ -29,7 +29,8 @@ Regression trees (a target has to be given):
 Any tree:
 
 * :class:`MinSamples` -- leaves with at least a given number of training
-  samples (trees that store them, e.g., built from scikit-learn).
+  samples (trees that store them, e.g., built from scikit-learn); and
+* :class:`Leaves` -- given leaves, e.g., the leaf of another data point.
 
 Targets combine with ``&`` for both, ``|`` for either and ``~`` for not;
 e.g., ``OtherClass() & MinSamples(20)`` leads to leaves of another class
@@ -59,8 +60,8 @@ from ctreex.tree import CLASSIFICATION, REGRESSION
 
 __all__ = ['TargetContext', 'Target', 'OtherClass', 'TargetClass',
            'SameClass', 'ClassProbability', 'ValueChange', 'ValueAtLeast',
-           'ValueAtMost', 'ValueWithin', 'MinSamples', 'AllOf', 'AnyOf',
-           'Not', 'select_targets']
+           'ValueAtMost', 'ValueWithin', 'MinSamples', 'Leaves', 'AllOf',
+           'AnyOf', 'Not', 'select_targets']
 
 _CLASSIFICATION_TARGETS = 'OtherClass, TargetClass, SameClass or ' \
     'ClassProbability'
@@ -417,6 +418,35 @@ class MinSamples(Target):
 
     def select(self, context):
         return context.leaf_samples >= self.n
+
+
+@dataclasses.dataclass(frozen=True, init=False)
+class Leaves(Target):
+    """
+    Given leaves, e.g., ``Leaves(7)`` or ``Leaves(7, 12)``.
+
+    Attributes
+    ----------
+    ids : tuple of int
+        The leaf ids (see ``TreeCounterfactualExplainer.predict_leaf``).
+    """
+    ids: tuple
+
+    def __init__(self, *ids):
+        if not ids:
+            raise TypeError('Leaves needs at least one leaf.')
+        object.__setattr__(self, 'ids', tuple(dict.fromkeys(
+            int(i) for i in ids)))
+
+    def validate(self, context):
+        unknown = [i for i in self.ids if i not in set(
+            context.leaf_ids.tolist())]
+        if unknown:
+            raise ValueError('These nodes are not leaves: {}.'.format(
+                ', '.join(map(str, unknown))))
+
+    def select(self, context):
+        return np.isin(context.leaf_ids, self.ids)
 
 
 def _targets(name, targets):

@@ -145,6 +145,16 @@ their features to change (`rank_by='frequency'`, the default),
 by the number of training samples of their leaves (`rank_by='samples'`) or
 by the purity of their leaves (`rank_by='purity'`).
 
+`explainer.explain_contrast(x, x_reference)` explains how a data point would
+have to change to be treated like another one (*instance-contrastive*
+explanations):
+its counterfactuals lead to the outcome of the reference and those whose new
+values include the values of the reference come first
+(`DistanceCounterfactuals.reference_matches` lists these features).
+With `same_leaf=True` they lead to the leaf of the reference instead, so the
+two data points may share their prediction;
+regression trees need a `tolerance` around the prediction of the reference.
+
 Besides counterfactuals, CtreeX explains what *guarantees* a prediction
 (`ctreex.supportive`):
 
@@ -207,8 +217,8 @@ the same, e.g., `explainer.volatility_index(leaf, tolerance=50)`.
 
 | Object | Purpose |
 |---|---|
-| `TreeCounterfactualExplainer(model, feature_spec, class_names)` | the explainer; `explain_instance(x, instance_values, max_distance, excluded, included, target, rank_by)` returns a `CounterfactualExplanation` |
-| `OtherClass`, `TargetClass`, `SameClass`, `ClassProbability`, `ValueChange`, `ValueAtLeast`, `ValueAtMost`, `ValueWithin`, `MinSamples`, `AllOf`, `AnyOf`, `Not`, `Target` | the leaves the counterfactuals lead to (`ctreex.targets`) |
+| `TreeCounterfactualExplainer(model, feature_spec, class_names)` | the explainer; `explain_instance(x, instance_values, max_distance, excluded, included, target, rank_by, directions)` returns a `CounterfactualExplanation`; `explain_contrast(x, x_reference, same_leaf, tolerance)` contrasts two data points |
+| `OtherClass`, `TargetClass`, `SameClass`, `ClassProbability`, `ValueChange`, `ValueAtLeast`, `ValueAtMost`, `ValueWithin`, `MinSamples`, `Leaves`, `AllOf`, `AnyOf`, `Not`, `Target` | the leaves the counterfactuals lead to (`ctreex.targets`) |
 | `feature_audit` | where a feature alone changes the prediction (`FeatureAudit`, `FeatureFlip`, `ctreex.audit`) |
 | `monotonicity_violations` | pairs of leaves where changing a feature in a direction makes the prediction worse (`MonotonicityViolation`, `ctreex.audit`) |
 | `supportive_explanations`, `invariance_ranges`, `contextualise` | what guarantees a prediction (`SupportiveExplanation`, `ContextualisedCounterfactual`, `ctreex.supportive`) |

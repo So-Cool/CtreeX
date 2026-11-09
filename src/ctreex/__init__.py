@@ -17,17 +17,17 @@ from ctreex.features import Feature, FeatureSpec
 from ctreex.audit import FeatureAudit, FeatureFlip, MonotonicityViolation
 from ctreex.supportive import (ContextualisedCounterfactual,
                                SupportiveExplanation)
-from ctreex.targets import (AllOf, AnyOf, ClassProbability, MinSamples, Not,
-                            OtherClass, SameClass, Target, TargetClass,
-                            ValueAtLeast, ValueAtMost, ValueChange,
-                            ValueWithin)
+from ctreex.targets import (AllOf, AnyOf, ClassProbability, Leaves,
+                            MinSamples, Not, OtherClass, SameClass, Target,
+                            TargetClass, ValueAtLeast, ValueAtMost,
+                            ValueChange, ValueWithin)
 from ctreex.tree import TreeStructure, load_tree
 
 __all__ = ['TreeCounterfactualExplainer', 'CounterfactualExplanation',
            'DistanceCounterfactuals', 'Feature', 'FeatureSpec',
            'Target', 'OtherClass', 'TargetClass', 'SameClass',
            'ClassProbability', 'ValueChange', 'ValueAtLeast', 'ValueAtMost',
-           'ValueWithin', 'MinSamples', 'AllOf', 'AnyOf', 'Not',
+           'ValueWithin', 'MinSamples', 'Leaves', 'AllOf', 'AnyOf', 'Not',
            'SupportiveExplanation', 'ContextualisedCounterfactual',
            'MonotonicityViolation', 'FeatureAudit', 'FeatureFlip',
            'TreeStructure', 'load_tree']

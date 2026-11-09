@@ -73,6 +73,11 @@ class DistanceCounterfactuals(object):
         ranked counterfactual leads to
         (counterfactuals are merged per leaf value, so the two are equal;
         empty for classification trees).
+    reference_matches : dict
+        ``{rank: [features]}`` -- for instance-contrastive explanations
+        (:meth:`TreeCounterfactualExplainer.explain_contrast`), the changed
+        features whose new values include the value of the reference data
+        point; empty otherwise.
     """
     distance: int
     per_leaf: dict
@@ -82,6 +87,7 @@ class DistanceCounterfactuals(object):
     ranked_classes: dict = dataclasses.field(default_factory=dict)
     leaf_values: dict = dataclasses.field(default_factory=dict)
     ranked_values: dict = dataclasses.field(default_factory=dict)
+    reference_matches: dict = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass
@@ -112,6 +118,10 @@ class CounterfactualExplanation(object):
         (class-equivalent).
     task : {'classification', 'regression'}
         The kind of the tree.
+    reference : dict or None
+        For instance-contrastive explanations
+        (:meth:`TreeCounterfactualExplainer.explain_contrast`), the base
+        feature values of the reference data point; ``None`` otherwise.
     """
     leaf: int
     prediction: object
@@ -122,6 +132,7 @@ class CounterfactualExplanation(object):
     counterfactuals: list
     target: tgt.Target = dataclasses.field(default_factory=tgt.OtherClass)
     task: str = 'classification'
+    reference: dict = None
 
     @property
     def distances(self):
@@ -651,6 +662,102 @@ class TreeCounterfactualExplainer(object):
             if feature in found[0].per_feature:
                 result.closest.append(i)
         return result
+
+    def explain_contrast(self, x, x_reference, same_leaf=False,
+                         tolerance=None, **kwargs):
+        """
+        Explains how a data point would have to change to be treated like a
+        reference data point (instance-contrastive explanations).
+
+        The counterfactuals of ``x`` lead to the leaves predicting the outcome
+        of ``x_reference`` -- or, with ``same_leaf``, to its leaf -- and at
+        every distance those whose new values include the values of the
+        reference come first (``DistanceCounterfactuals.reference_matches``
+        lists these features).
+
+        Parameters
+        ----------
+        x, x_reference : array-like
+            One-hot encoded data points.
+        same_leaf : bool
+            Lead to the leaf of the reference instead of its outcome;
+            then the two data points may have the same prediction, but not
+            the same leaf.
+        tolerance : float, optional
+            Regression trees (required unless ``same_leaf``): the leaves
+            predicting at most ``tolerance`` more or less than the reference
+            are targets;
+            the prediction of ``x`` has to differ by more.
+        **kwargs
+            Passed to :meth:`explain_instance` (e.g., ``max_distance``,
+            ``excluded``, ``included``, ``directions``, ``rank_by``), except
+            ``target``.
+
+        Returns
+        -------
+        CounterfactualExplanation
+            With the ``reference`` values.
+
+        Raises
+        ------
+        ValueError
+            The two data points have the same outcome (and ``same_leaf`` is
+            not set) or the same leaf.
+        """
+        if 'target' in kwargs:
+            raise TypeError('explain_contrast sets the target from the '
+                            'reference data point.')
+        x_reference, reference_values, reference_leaf, reference_meta = \
+            self._prepare(x_reference, None)
+        leaf = self.predict_leaf(val.check_row(x, self.spec.n_columns))
+        context = self.target_context(reference_leaf)
+        own = self.target_context(leaf).prediction
+        if same_leaf:
+            if leaf == reference_leaf:
+                raise ValueError('The data points share their leaf.')
+            if tolerance is not None:
+                raise ValueError('tolerance is not used with same_leaf.')
+            target = tgt.Leaves(reference_leaf)
+        elif self.task == REGRESSION:
+            if tolerance is None or tolerance < 0:
+                raise ValueError('Regression trees need a non-negative '
+                                 'tolerance: the leaves predicting at most '
+                                 'tolerance more or less than the reference '
+                                 'are targets.')
+            if abs(own - context.prediction) <= tolerance:
+                raise ValueError('The predictions of the data points differ '
+                                 'by at most the tolerance; use '
+                                 'same_leaf=True to reach the leaf of the '
+                                 'reference.')
+            target = (tgt.ValueAtLeast(context.prediction - tolerance)
+                      & tgt.ValueAtMost(context.prediction + tolerance))
+        else:
+            if tolerance is not None:
+                raise ValueError('The leaves of classification trees are '
+                                 'compared by their classes (no tolerance).')
+            if own == context.prediction:
+                raise ValueError('The data points have the same prediction '
+                                 '({!r}); use same_leaf=True to reach the '
+                                 'leaf of the reference.'.format(own))
+            target = tgt.TargetClass(context.prediction)
+        explanation = self.explain_instance(x, target=target, **kwargs)
+        lmf = self.leaf_meta_features
+        for found in explanation.counterfactuals:
+            matches = {rank: sup.matching_features(lmf, reference_meta, cf)
+                       for rank, cf in found.ranked.items()}
+            # more matching features first; ties keep their order
+            order = sorted(found.ranked, key=lambda r: -len(matches[r]))
+            found.ranked = {new: found.ranked[old]
+                            for new, old in enumerate(order)}
+            for name in ('ranked_classes', 'ranked_values'):
+                ranked = getattr(found, name)
+                if ranked:
+                    setattr(found, name, {new: ranked[old] for new, old
+                                          in enumerate(order)})
+            found.reference_matches = {new: matches[old]
+                                       for new, old in enumerate(order)}
+        explanation.reference = reference_values
+        return explanation
 
     def explain_instance(self, x, instance_values=None, max_distance=None,
                          excluded=(), included=(), target=None,
