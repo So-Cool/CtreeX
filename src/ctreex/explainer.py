@@ -585,6 +585,73 @@ class TreeCounterfactualExplainer(object):
         return audit.monotonicity_violations(
             self.leaf_meta_features, feature, direction, outputs, worse)
 
+    def feature_audit(self, feature, X=None, target=None, tolerance=None):
+        """
+        Where a feature alone changes the prediction (see
+        :func:`ctreex.audit.feature_flips`), e.g., to check whether a
+        protected attribute decides the outcome for some data points.
+
+        Parameters
+        ----------
+        feature : str
+        X : array-like, optional
+            One-hot encoded data points;
+            when given, the audit also lists the data points whose prediction
+            the feature can change (``alone`` and ``closest``).
+        target : ctreex.targets.Target, optional
+            The target of the counterfactuals of the data points
+            (``OtherClass()`` by default, required for regression trees with
+            data, e.g., ``ValueChange(+100)``).
+        tolerance : float, optional
+            Regression trees (required): the predictions of two leaves are
+            different when they differ by more than the tolerance.
+
+        Returns
+        -------
+        ctreex.audit.FeatureAudit
+        """
+        val.check_features([feature], self.spec, 'feature')
+        if self.task == REGRESSION:
+            if tolerance is None:
+                raise ValueError('Regression leaves are compared with a '
+                                 'tolerance: predictions that differ by more '
+                                 'than tolerance are different.')
+            if tolerance < 0:
+                raise ValueError('tolerance cannot be negative.')
+
+            def changed(before, after):
+                return abs(after - before) > tolerance
+        else:
+            if tolerance is not None:
+                raise ValueError('The leaves of classification trees are '
+                                 'compared by their classes (no tolerance).')
+
+            def changed(before, after):
+                return before != after
+        outputs = [_python(o) for o in self._leaf_outputs()]
+        flips = audit.feature_flips(self.leaf_meta_features, feature,
+                                    outputs, changed)
+        affected = set(f.from_leaf for f in flips)
+        ids = self.leaf_meta_features.leaf_ids.tolist()
+        result = audit.FeatureAudit(
+            feature=feature, flips=flips,
+            affected_leaves=[leaf for leaf in ids if leaf in affected],
+            unaffected_leaves=[leaf for leaf in ids if leaf not in affected])
+        if X is None:
+            return result
+        X = val.check_array_2d(X, self.spec.n_columns)
+        result.n_points, result.alone, result.closest = X.shape[0], [], []
+        for i, x in enumerate(X):
+            explanation = self.explain_instance(x, target=target)
+            found = [c for c in explanation.counterfactuals if c.per_leaf]
+            if not found:
+                continue
+            if found[0].distance == 1 and feature in found[0].per_feature:
+                result.alone.append(i)
+            if feature in found[0].per_feature:
+                result.closest.append(i)
+        return result
+
     def explain_instance(self, x, instance_values=None, max_distance=None,
                          excluded=(), included=(), target=None,
                          rank_by='frequency', directions=None):

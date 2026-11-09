@@ -176,6 +176,19 @@ prediction of a regression tree), with the values of the feature before and
 after the change and the shared values of the other features
 (`MonotonicityViolation`).
 
+`explainer.feature_audit('gender')` shows where a feature alone changes the
+prediction, e.g., whether a protected attribute decides the outcome for some
+applicants:
+it lists the pairs of leaves where changing the feature alone changes the
+prediction (`FeatureFlip`, with the values of the feature before and after and
+the shared values of the other features) and the leaves whose prediction does
+or does not depend on the feature.
+With data, `explainer.feature_audit('gender', X=X)` also lists the data points
+whose prediction changes when the feature alone changes and those whose
+closest counterfactuals involve it (`FeatureAudit`).
+Regression trees need a `tolerance` (predictions that differ by more are
+different) and, with data, a `target`.
+
 The leaf-to-leaf distance matrix (`explainer.leaf_distance_matrix()`), its
 heat map and histograms (`ctreex.plot`) and the *volatility index* of a leaf
 -- i.e., how close it is to leaves of other classes
@@ -196,6 +209,7 @@ the same, e.g., `explainer.volatility_index(leaf, tolerance=50)`.
 |---|---|
 | `TreeCounterfactualExplainer(model, feature_spec, class_names)` | the explainer; `explain_instance(x, instance_values, max_distance, excluded, included, target, rank_by)` returns a `CounterfactualExplanation` |
 | `OtherClass`, `TargetClass`, `SameClass`, `ClassProbability`, `ValueChange`, `ValueAtLeast`, `ValueAtMost`, `ValueWithin`, `MinSamples`, `AllOf`, `AnyOf`, `Not`, `Target` | the leaves the counterfactuals lead to (`ctreex.targets`) |
+| `feature_audit` | where a feature alone changes the prediction (`FeatureAudit`, `FeatureFlip`, `ctreex.audit`) |
 | `monotonicity_violations` | pairs of leaves where changing a feature in a direction makes the prediction worse (`MonotonicityViolation`, `ctreex.audit`) |
 | `supportive_explanations`, `invariance_ranges`, `contextualise` | what guarantees a prediction (`SupportiveExplanation`, `ContextualisedCounterfactual`, `ctreex.supportive`) |
 | `CounterfactualExplanation` | `prediction`, `leaf`, `target`, `leaf_distances`, `support` (target and other leaves per distance), `counterfactuals` (one `DistanceCounterfactuals` per distance), `ranked()`, `at_distance(d)` |

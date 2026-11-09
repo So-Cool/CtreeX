@@ -14,7 +14,7 @@ from ctreex.explainer import (CounterfactualExplanation,
                               DistanceCounterfactuals,
                               TreeCounterfactualExplainer)
 from ctreex.features import Feature, FeatureSpec
-from ctreex.audit import MonotonicityViolation
+from ctreex.audit import FeatureAudit, FeatureFlip, MonotonicityViolation
 from ctreex.supportive import (ContextualisedCounterfactual,
                                SupportiveExplanation)
 from ctreex.targets import (AllOf, AnyOf, ClassProbability, MinSamples, Not,
@@ -29,7 +29,7 @@ __all__ = ['TreeCounterfactualExplainer', 'CounterfactualExplanation',
            'ClassProbability', 'ValueChange', 'ValueAtLeast', 'ValueAtMost',
            'ValueWithin', 'MinSamples', 'AllOf', 'AnyOf', 'Not',
            'SupportiveExplanation', 'ContextualisedCounterfactual',
-           'MonotonicityViolation',
+           'MonotonicityViolation', 'FeatureAudit', 'FeatureFlip',
            'TreeStructure', 'load_tree']
 
 try:

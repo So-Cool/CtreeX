@@ -75,6 +75,21 @@
   `context` of the other features shared by the two leaves
   (in the counterfactual format).
   New module `ctreex.audit`.
+* **Feature audits.**
+  `TreeCounterfactualExplainer.feature_audit(feature, X, target, tolerance)`
+  shows where a feature alone changes the prediction, e.g., to check whether
+  a protected attribute decides the outcome.
+  The `FeatureAudit` lists all the pairs of leaves that differ only on the
+  feature and predict different outcomes (`FeatureFlip`, with the values of
+  the feature `before` and `after` and the shared `context`,
+  `ctreex.audit.feature_flips`) and the leaves whose prediction does
+  (`affected_leaves`) or does not (`unaffected_leaves`) depend on the
+  feature.
+  With data `X`, it also lists the indices of the data points whose
+  prediction changes when the feature alone changes (`alone`) and of those
+  whose closest counterfactuals involve the feature (`closest`).
+  Regression trees need a `tolerance` (leaf predictions that differ by more
+  than it are different) and, with data, a `target`.
 
 ## 0.1.0
 
