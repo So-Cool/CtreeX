@@ -25,6 +25,34 @@
   ties keep the frequency order.
   `rank_counterfactuals` takes the corresponding `leaf_scores` and
   `aggregate`.
+* **Supportive explanations.**
+  `TreeCounterfactualExplainer.supportive_explanations(x, target)` finds all
+  the smallest sets of features of a data point that guarantee its
+  prediction (`SameClass()` by default, a target such as `ValueWithin(10)`
+  for regression trees) whatever the values of the other features;
+  every feature is fixed at the meta-feature of the data point's value, i.e,,
+  the interval between the two thresholds around it or its category.
+  The search considers all the features used by the tree, so explanations
+  may include features that the path of the data point does not test.
+* **Invariance ranges.**
+  `TreeCounterfactualExplainer.invariance_ranges(x, target)` lists the values
+  of every feature used by the tree that keep the prediction when the other
+  features do not change.
+* **Contextualised counterfactuals.**
+  `TreeCounterfactualExplainer.contextualise(explanation, max_size)` adds to
+  every ranked counterfactual all the smallest sets of the other features
+  (fixed at the data point's values) that guarantee its outcome whatever the
+  values of the remaining features;
+  `max_size` (the depth of the tree by default) limits the search and a
+  counterfactual without a context of at most `max_size` features raises
+  `ValueError`.
+* **New supportive explanation module.**
+  New `ctreex.supportive` module with the `SupportiveExplanation` and
+  `ContextualisedCounterfactual` dataclasses and the functions behind the
+  three methods;
+  their conditions use the counterfactual format so `describe` works.
+  `describe_range` describes an interval without bounds as `'any value'`
+  (instead of raising `ValueError`).
 
 ## 0.1.0
 

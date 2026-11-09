@@ -192,8 +192,7 @@ def test_building_blocks():
         (['0', '3'], [])
     assert describe_range([None, '5']) == 'less or equal to 5'
     assert describe_range(['5', None]) == 'more than 5'
-    with pytest.raises(ValueError):
-        describe_range([None, None])
+    assert describe_range([None, None]) == 'any value'
 
 
 def test_plots(explainer):

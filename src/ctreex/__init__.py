@@ -14,6 +14,8 @@ from ctreex.explainer import (CounterfactualExplanation,
                               DistanceCounterfactuals,
                               TreeCounterfactualExplainer)
 from ctreex.features import Feature, FeatureSpec
+from ctreex.supportive import (ContextualisedCounterfactual,
+                               SupportiveExplanation)
 from ctreex.targets import (AllOf, AnyOf, ClassProbability, MinSamples, Not,
                             OtherClass, SameClass, Target, TargetClass,
                             ValueAtLeast, ValueAtMost, ValueChange,
@@ -25,6 +27,7 @@ __all__ = ['TreeCounterfactualExplainer', 'CounterfactualExplanation',
            'Target', 'OtherClass', 'TargetClass', 'SameClass',
            'ClassProbability', 'ValueChange', 'ValueAtLeast', 'ValueAtMost',
            'ValueWithin', 'MinSamples', 'AllOf', 'AnyOf', 'Not',
+           'SupportiveExplanation', 'ContextualisedCounterfactual',
            'TreeStructure', 'load_tree']
 
 try:

@@ -138,6 +138,28 @@ their features to change (`rank_by='frequency'`, the default),
 by the number of training samples of their leaves (`rank_by='samples'`) or
 by the purity of their leaves (`rank_by='purity'`).
 
+Besides counterfactuals, CtreeX explains what *guarantees* a prediction
+(`ctreex.supportive`):
+
+* `explainer.supportive_explanations(x)` generates the smallest sets of
+  features of a data point that guarantee its prediction whatever the values of
+  the other features, e.g., "since the duration is at most 11.5 months and the
+  property is real estate, the applicant is low risk";
+* `explainer.invariance_ranges(x)` outputs the values of every feature that
+  keep the prediction when the other features do not change; and
+* `explainer.contextualise(explanation)` produces every ranked counterfactual
+  with the smallest sets of the other features that guarantee its outcome,
+  e.g., "had the duration been at most 22.5 months, the applicant would have
+  been low risk, provided that the property is real estate".
+
+These features are fixed at the interval between the two thresholds around
+the value of the data point (or its category);
+the results use the counterfactual format, so `explainer.describe` works for
+them.
+Supportive explanations and invariance ranges keep the predicted class by
+default (`SameClass()`);
+regression trees need a target, e.g., `ValueWithin(10)`.
+
 The leaf-to-leaf distance matrix (`explainer.leaf_distance_matrix()`), its
 heat map and histograms (`ctreex.plot`) and the *volatility index* of a leaf
 -- i.e., how close it is to leaves of other classes
@@ -158,6 +180,7 @@ the same, e.g., `explainer.volatility_index(leaf, tolerance=50)`.
 |---|---|
 | `TreeCounterfactualExplainer(model, feature_spec, class_names)` | the explainer; `explain_instance(x, instance_values, max_distance, excluded, included, target, rank_by)` returns a `CounterfactualExplanation` |
 | `OtherClass`, `TargetClass`, `SameClass`, `ClassProbability`, `ValueChange`, `ValueAtLeast`, `ValueAtMost`, `ValueWithin`, `MinSamples`, `AllOf`, `AnyOf`, `Not`, `Target` | the leaves the counterfactuals lead to (`ctreex.targets`) |
+| `supportive_explanations`, `invariance_ranges`, `contextualise` | what guarantees a prediction (`SupportiveExplanation`, `ContextualisedCounterfactual`, `ctreex.supportive`) |
 | `CounterfactualExplanation` | `prediction`, `leaf`, `target`, `leaf_distances`, `support` (target and other leaves per distance), `counterfactuals` (one `DistanceCounterfactuals` per distance), `ranked()`, `at_distance(d)` |
 | `FeatureSpec`, `Feature` | maps the columns of a one-hot encoded array to features; display names and category names; `encode`/`decode` |
 | `TreeStructure`, `load_tree` | a fitted tree independent of scikit-learn: from scikit-learn, to/from JSON, from pickles; optional training statistics (`n_node_samples`, `weighted_n_node_samples`, `impurity`) |

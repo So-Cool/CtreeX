@@ -450,7 +450,8 @@ def describe_range(interval, short=False):
     """
     Describes an interval, e.g. ``'between 22.5 and 30.5'``.
 
-    ``short`` formats the bounds with :func:`format_bound`.
+    ``short`` formats the bounds with :func:`format_bound`;
+    an interval without bounds is ``'any value'``.
     """
     lower, upper = interval[0], interval[1]
     if short:
@@ -462,7 +463,7 @@ def describe_range(interval, short=False):
         return 'more than {}'.format(lower)
     if lower is not None and upper is not None:
         return 'between {} and {}'.format(lower, upper)
-    raise ValueError('Incorrectly formatted interval: {!r}.'.format(interval))
+    return 'any value'
 
 
 def describe_integer_range(interval):

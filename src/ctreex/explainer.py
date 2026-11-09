@@ -26,6 +26,7 @@ from ctreex import counterfactuals as cfs
 from ctreex import distances
 from ctreex import meta_features as mf
 from ctreex import _validation as val
+from ctreex import supportive as sup
 from ctreex import targets as tgt
 from ctreex.features import FeatureSpec
 from ctreex.tree import REGRESSION, load_tree
@@ -383,6 +384,135 @@ class TreeCounterfactualExplainer(object):
         return ({int(leaf): float(score)
                  for leaf, score in zip(context.leaf_ids, scores)},
                 aggregate)
+
+    def _prepare(self, x, instance_values):
+        """Validates a data point; returns it, its base feature values, its
+        leaf and its meta-features."""
+        x = val.check_row(x, self.spec.n_columns)
+        if np.isnan(x.astype(np.float64)).any():
+            raise ValueError('Data points with missing values (nan) cannot be '
+                             'explained; the tree can still predict them '
+                             '(predict_leaf).')
+        if instance_values is None:
+            instance_values = self.spec.decode(x)
+        return (x, instance_values, self.predict_leaf(x),
+                mf.instance_meta_features(x, self.meta_features))
+
+    def _keeping_targets(self, target, leaf):
+        """The targets of explanations that keep the prediction."""
+        if target is None:
+            if self.task == REGRESSION:
+                raise ValueError('Regression trees need a target, e.g., '
+                                 'ValueWithin(10).')
+            target = tgt.SameClass()
+        return tgt.select_targets(target, self.target_context(leaf))
+
+    def supportive_explanations(self, x, target=None, instance_values=None):
+        """
+        All the smallest sets of features of a data point that guarantee its
+        prediction (see :mod:`ctreex.supportive`).
+
+        Every feature of an explanation is fixed at the meta-feature of the
+        data point's value, i.e., the interval between the two thresholds
+        around it or its category;
+        whatever the values of the other features, the tree predicts the
+        target.
+
+        Parameters
+        ----------
+        x : array-like
+            One-hot encoded data point.
+        target : ctreex.targets.Target, optional
+            What the explanations guarantee;
+            it has to select the leaf of the data point
+            (``SameClass()`` by default, required for regression trees,
+            e.g., ``ValueWithin(10)``).
+        instance_values : dict, optional
+            Base feature values reported as ``'is'``.
+
+        Returns
+        -------
+        list of ctreex.supportive.SupportiveExplanation
+        """
+        x, instance_values, leaf, instance = self._prepare(x, instance_values)
+        return sup.supportive_explanations(
+            self.leaf_meta_features, leaf, instance, instance_values,
+            self._keeping_targets(target, leaf))
+
+    def invariance_ranges(self, x, target=None, instance_values=None):
+        """
+        The values of every feature that keep the prediction of a data point
+        when the other features do not change (see :mod:`ctreex.supportive`).
+
+        Parameters
+        ----------
+        x : array-like
+            One-hot encoded data point.
+        target : ctreex.targets.Target, optional
+            What has to be kept (``SameClass()`` by default, required for
+            regression trees, e.g., ``ValueWithin(10)``).
+        instance_values : dict, optional
+            Base feature values reported as ``'is'``.
+
+        Returns
+        -------
+        dict
+            ``{feature: {'is': [value], 'wannabe': [...]}}`` for every
+            feature used by the tree (``describe({0: ranges})`` works).
+        """
+        x, instance_values, leaf, instance = self._prepare(x, instance_values)
+        return sup.invariance_ranges(
+            self.leaf_meta_features, instance, instance_values,
+            self._keeping_targets(target, leaf))
+
+    def contextualise(self, explanation, max_size=None):
+        """
+        Adds to every ranked counterfactual of an explanation the smallest
+        sets of the other features that guarantee its outcome (see
+        :mod:`ctreex.supportive`).
+
+        Every context feature is fixed at the meta-feature of the data
+        point's value;
+        with the change and the context, the tree predicts the target of the
+        explanation whatever the values of the remaining features.
+
+        Parameters
+        ----------
+        explanation : CounterfactualExplanation
+        max_size : int, optional
+            The largest number of context features
+            (the depth of the tree by default).
+
+        Returns
+        -------
+        list of ctreex.supportive.ContextualisedCounterfactual
+            One per counterfactual and smallest context, ordered by distance
+            and rank.
+
+        Raises
+        ------
+        ValueError
+            A counterfactual has no context of at most ``max_size`` features.
+        """
+        if max_size is None:
+            max_size = max(len(p.conditions) for p in self.paths)
+        targets = tgt.select_targets(explanation.target,
+                                     self.target_context(explanation.leaf))
+        out = []
+        for found in explanation.counterfactuals:
+            for rank, change in found.ranked.items():
+                contexts = sup.contextualise_counterfactual(
+                    self.leaf_meta_features, explanation.meta_features,
+                    explanation.instance_values, targets, change, max_size)
+                if not contexts:
+                    raise ValueError(
+                        'The counterfactual {} at distance {} has no context '
+                        'of at most {} features; increase max_size.'.format(
+                            rank, found.distance, max_size))
+                out.extend(sup.ContextualisedCounterfactual(
+                    found.distance, rank, change, context, leaves)
+                    for context, leaves in contexts)
+        return out
 
     def explain_instance(self, x, instance_values=None, max_distance=None,
                          excluded=(), included=(), target=None,
