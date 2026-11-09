@@ -53,6 +53,28 @@
   their conditions use the counterfactual format so `describe` works.
   `describe_range` describes an interval without bounds as `'any value'`
   (instead of raising `ValueError`).
+* **Ordered categorical features.**
+  `Feature(..., ordered=True)` marks ordinal categories;
+  the `values` given with an ordered feature set the order of its categories
+  (otherwise the order of its columns is used).
+  Numerical features cannot be marked as ordered (they always are).
+* **Direction constraints.**
+  `explain_instance(..., directions={'age': 'increase'})` lets numerical and
+  ordered categorical features change only in the given direction;
+  the values in the other direction are removed from the counterfactuals and
+  a leaf is used only if some of its values remain
+  (`ctreex.counterfactuals.in_direction`, `extract_counterfactuals` takes
+  `directions`).
+* **Monotonicity audits.**
+  `TreeCounterfactualExplainer.monotonicity_violations(feature, direction, positive)`
+  lists the pairs of leaves that differ only on the feature where changing it
+  in the direction makes the prediction worse, i.e., moves away from the
+  `positive` class or, for regression trees, lowers the prediction;
+  every `MonotonicityViolation` holds the two leaves and their predictions,
+  the values of the feature `before` and `after` the change as well as the
+  `context` of the other features shared by the two leaves
+  (in the counterfactual format).
+  New module `ctreex.audit`.
 
 ## 0.1.0
 

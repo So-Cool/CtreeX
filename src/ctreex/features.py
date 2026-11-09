@@ -29,7 +29,8 @@ class Feature(object):
         Feature type.
     values : list of str
         Categories (for categorical features) in the order of their one-hot
-        columns; empty for numerical features.
+        columns, or, for ordered features given with their values, in
+        their order; empty for numerical features.
     display_name : str
         Human-readable name (defaults to ``name``).
     value_names : dict
@@ -38,6 +39,15 @@ class Feature(object):
         Whether a numerical feature takes only whole values; its ranges can
         then be described with whole numbers (see
         :func:`ctreex.counterfactuals.describe_counterfactuals`).
+    ordered : bool
+        Whether the categories of a categorical feature are ordered (ordinal),
+        e.g., years of employment;
+        their order is the order of ``values``, which give the values with the
+        feature to set it, otherwise the order of the one-hot columns is used.
+        Ordered features can be restricted to change in one direction
+        (``explain_instance(..., directions=...)``) and audited for
+        monotonicity.
+        Numerical features are always ordered.
     """
     name: str
     kind: str
@@ -45,12 +55,16 @@ class Feature(object):
     display_name: str = None
     value_names: dict = dataclasses.field(default_factory=dict)
     integer: bool = False
+    ordered: bool = False
 
     def __post_init__(self):
         if self.kind not in (NUMERICAL, CATEGORICAL):
             raise ValueError('Unknown feature kind: {!r}.'.format(self.kind))
         if self.integer and self.kind != NUMERICAL:
             raise ValueError('Only numerical features can be integers.')
+        if self.ordered and self.kind != CATEGORICAL:
+            raise ValueError('Only categorical features can be ordered '
+                             '(numerical features always are).')
         if self.display_name is None:
             self.display_name = self.name
 
@@ -71,6 +85,9 @@ class FeatureSpec(object):
     features : list of Feature, optional
         Feature metadata (display names, value names). Features missing from
         this list are created automatically.
+        The ``values`` of an ordered feature set the order of its categories
+        (they have to be its categories); other features list their
+        categories in the order of their columns.
     separator : str
         Used to build column names (``<feature><separator><category>``).
 
@@ -107,6 +124,14 @@ class FeatureSpec(object):
                     raise ValueError('Duplicated column: {}={}.'.format(
                         name, category))
                 self.features[name].values.append(category)
+        for name, feature in self.features.items():
+            order = given[name].values if name in given else []
+            if feature.ordered and order:
+                if sorted(map(str, order)) != sorted(feature.values):
+                    raise ValueError(
+                        'The values of the ordered feature {!r} have to be '
+                        'its categories: {}.'.format(name, feature.values))
+                feature.values = [str(v) for v in order]
         self.column_names = [
             name if category is None else
             '{}{}{}'.format(name, separator, category)

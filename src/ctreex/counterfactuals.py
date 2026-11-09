@@ -242,8 +242,53 @@ def grow_region(interval, intervals):
     return interval, intervals
 
 
+INCREASE = 'increase'
+DECREASE = 'decrease'
+DIRECTIONS = (INCREASE, DECREASE)
+
+
+def in_direction(members, instance_group, wannabe, direction):
+    """
+    The part of the ``wannabe`` values of a feature in a direction.
+
+    Parameters
+    ----------
+    members : list of ctreex.meta_features.MetaFeature
+        The meta-features of the feature, in their order (thresholds for
+        numerical features, categories for ordered categorical ones).
+    instance_group : numpy.ndarray
+        The meta-feature values of the data point for the feature.
+    wannabe : list
+        Intervals (numerical features) or categories.
+    direction : {'increase', 'decrease'}
+
+    Returns
+    -------
+    list
+        The intervals (categories) above (below) the value of the data point.
+    """
+    ones = np.flatnonzero(np.asarray(instance_group) == 1)
+    if ones.size != 1:
+        raise ValueError('The value of {!r} is unknown, so it cannot change '
+                         'in a direction.'.format(members[0].feature))
+    own = members[int(ones[0])]
+    if own.kind == NUMERICAL:
+        if direction == INCREASE:
+            return [c for c in wannabe if c[0] is not None
+                    and own.upper is not None
+                    and float(c[0]) >= float(own.upper)]
+        return [c for c in wannabe if c[1] is not None
+                and own.lower is not None and float(c[1]) <= float(own.lower)]
+    order = [m.category for m in members]
+    position = order.index(own.category)
+    if direction == INCREASE:
+        return [c for c in wannabe if order.index(c) > position]
+    return [c for c in wannabe if order.index(c) < position]
+
+
 def extract_counterfactuals(lmf, instance, instance_values, support,
-                            distance=1, excluded=(), included=(), exact=True):
+                            distance=1, excluded=(), included=(), exact=True,
+                            directions=None):
     """
     Extracts the counterfactuals of a data point at a given distance.
 
@@ -269,6 +314,13 @@ def extract_counterfactuals(lmf, instance, instance_values, support,
         changes exactly ``d`` features.
     exact : bool
         Distance flavour used to find the features that differ.
+    directions : dict, optional
+        ``{feature: 'increase' or 'decrease'}`` indicating that these
+        (numerical or ordered categorical) features may only change in the
+        given direction;
+        the values in the other direction are removed from the counterfactuals
+        and a leaf is used only if some of its values lie in the given
+        direction (see :func:`in_direction`).
 
     Returns
     -------
@@ -294,7 +346,7 @@ def extract_counterfactuals(lmf, instance, instance_values, support,
         if any(feature in excluded or feature not in included
                for _, feature, _ in changed):
             continue  # this leaf needs a forbidden feature
-        per_leaf[leaf] = {}
+        changes = {}
         for kind, feature, indices in changed:
             values = row[indices]
             members = [lmf.meta_features[i] for i in indices]
@@ -310,9 +362,17 @@ def extract_counterfactuals(lmf, instance, instance_values, support,
                     wannabe.append(c)
             else:
                 wannabe = [m.category for m in selected]
-            per_leaf[leaf][feature] = {'is': [instance_values[feature]],
-                                       'wannabe': wannabe}
-            per_feature.setdefault(feature, []).append(leaf)
+            if directions and feature in directions:
+                wannabe = in_direction(members, instance[indices], wannabe,
+                                       directions[feature])
+                if not wannabe:
+                    break  # this leaf needs a change in the other direction
+            changes[feature] = {'is': [instance_values[feature]],
+                                'wannabe': wannabe}
+        else:
+            per_leaf[leaf] = changes
+            for feature in changes:
+                per_feature.setdefault(feature, []).append(leaf)
     return per_leaf, per_feature
 
 

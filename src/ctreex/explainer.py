@@ -26,9 +26,10 @@ from ctreex import counterfactuals as cfs
 from ctreex import distances
 from ctreex import meta_features as mf
 from ctreex import _validation as val
+from ctreex import audit
 from ctreex import supportive as sup
 from ctreex import targets as tgt
-from ctreex.features import FeatureSpec
+from ctreex.features import NUMERICAL, FeatureSpec
 from ctreex.tree import REGRESSION, load_tree
 
 __all__ = ['TreeCounterfactualExplainer', 'CounterfactualExplanation',
@@ -514,9 +515,79 @@ class TreeCounterfactualExplainer(object):
                     for context, leaves in contexts)
         return out
 
+    def _check_directions(self, directions):
+        """Validates ``{feature: 'increase' or 'decrease'}``."""
+        if directions is None:
+            return {}
+        if not isinstance(directions, dict):
+            raise TypeError('directions has to be a dictionary, e.g., '
+                            "{'age': 'increase'}.")
+        val.check_features(list(directions), self.spec, 'directions')
+        for feature, direction in directions.items():
+            if direction not in cfs.DIRECTIONS:
+                raise ValueError("The direction of {!r} has to be 'increase' "
+                                 "or 'decrease'; got {!r}.".format(
+                                     feature, direction))
+            self._check_ordered(feature)
+        return dict(directions)
+
+    def _check_ordered(self, feature):
+        spec_feature = self.spec.features[feature]
+        if spec_feature.kind != NUMERICAL and not spec_feature.ordered:
+            raise ValueError('{!r} is an unordered categorical feature; '
+                             'directions need numerical or ordered features '
+                             '(Feature(..., ordered=True)).'.format(feature))
+
+    def monotonicity_violations(self, feature, direction='increase',
+                                positive=None):
+        """
+        Pairs of leaves where changing a feature in a direction, with the
+        other features unchanged, makes the prediction worse
+        (see :func:`ctreex.audit.monotonicity_violations`).
+
+        Parameters
+        ----------
+        feature : str
+            A numerical or ordered categorical feature.
+        direction : {'increase', 'decrease'}
+            The direction in which changing the feature should never make the
+            prediction worse.
+        positive : object, optional
+            For classification trees (required), the better class, leaving
+            which makes the prediction worse;
+            for regression trees, a smaller prediction is worse.
+
+        Returns
+        -------
+        list of ctreex.audit.MonotonicityViolation
+        """
+        val.check_features([feature], self.spec, 'feature')
+        self._check_ordered(feature)
+        if direction not in cfs.DIRECTIONS:
+            raise ValueError("direction has to be 'increase' or 'decrease'; "
+                             'got {!r}.'.format(direction))
+        if self.task == REGRESSION:
+            if positive is not None:
+                raise ValueError('Regression trees have no positive class; '
+                                 'a smaller prediction is worse.')
+
+            def worse(before, after):
+                return after < before
+        else:
+            if positive not in set(self.leaf_meta_features.leaf_classes
+                                   .tolist()):
+                raise ValueError('positive has to be a class predicted by '
+                                 'some leaf; got {!r}.'.format(positive))
+
+            def worse(before, after):
+                return before == positive and after != positive
+        outputs = [_python(o) for o in self._leaf_outputs()]
+        return audit.monotonicity_violations(
+            self.leaf_meta_features, feature, direction, outputs, worse)
+
     def explain_instance(self, x, instance_values=None, max_distance=None,
                          excluded=(), included=(), target=None,
-                         rank_by='frequency'):
+                         rank_by='frequency', directions=None):
         """
         Computes the counterfactuals of a data point.
 
@@ -564,6 +635,12 @@ class TreeCounterfactualExplainer(object):
             first, needs ``impurity``) -- taking the least pure of the merged
             leaves.
             Ties keep the ``'frequency'`` order.
+        directions : dict, optional
+            ``{feature: 'increase' or 'decrease'}`` -- numerical or ordered
+            categorical (``Feature.ordered``) features that may only change
+            in the given direction, e.g., ``{'age': 'increase'}``;
+            values in the other direction are left out and leaves reachable
+            only that way are not used.
 
         Returns
         -------
@@ -572,6 +649,7 @@ class TreeCounterfactualExplainer(object):
         x = val.check_row(x, self.spec.n_columns)
         excluded = val.check_features(excluded, self.spec, 'excluded')
         included = val.check_features(included, self.spec, 'included')
+        directions = self._check_directions(directions)
         if np.isnan(x.astype(np.float64)).any():
             raise ValueError('Data points with missing values (nan) cannot be '
                              'explained; the tree can still predict them '
@@ -601,7 +679,8 @@ class TreeCounterfactualExplainer(object):
             try:
                 per_leaf, per_feature = cfs.extract_counterfactuals(
                     lmf, instance, instance_values, support,
-                    distance=distance, excluded=excluded, included=included)
+                    distance=distance, excluded=excluded, included=included,
+                    directions=directions)
             except cfs.MissingDistance:  # no leaf this far from the point
                 continue
             outputs = {leaf: _python(self._leaf_outputs()[lmf.leaf_index(

@@ -83,15 +83,22 @@ confident leaves and custom specifications, and regression trees).
 
 Counterfactuals can be restricted:
 
-* `excluded=['age']` -- never change these features; and
-* `included=['income']` -- change only these features.
+* `excluded=['age']` -- never change these features;
+* `included=['income']` -- change only these features; and
+* `directions={'age': 'increase'}` -- change these features only in the given
+  direction (`'increase'` or `'decrease'`), which only works for numerical or
+  ordered categorical features, e.g.,
+  `Feature('employment', 'categorical', values=['none', 'short', 'long'], ordered=True)`
+  (the `values` of an ordered feature set the order of its categories).
 
 The names are those of the features of the specification
 (`FeatureSpec.features`), not their display names;
 unknown names raise an error.
 
 A leaf is used only if all the features that have to change to reach it are
-allowed, so every counterfactual at distance *d* changes exactly *d* features.
+allowed, so every counterfactual at distance *d* changes exactly *d* features;
+with directions, only the values in the given direction are kept and a leaf
+is used only if some of them remain.
 
 The `target` of `explain_instance` selects the leaves the counterfactuals
 lead to (`ctreex.targets`):
@@ -160,6 +167,15 @@ Supportive explanations and invariance ranges keep the predicted class by
 default (`SameClass()`);
 regression trees need a target, e.g., `ValueWithin(10)`.
 
+`explainer.monotonicity_violations('income', 'increase', positive='good')`
+audits a tree (`ctreex.audit`):
+it lists the pairs of leaves where changing a numerical or ordered feature in
+the given direction -- with the other features unchanged -- makes the
+prediction worse (changes away from the `positive` class, or lowers the
+prediction of a regression tree), with the values of the feature before and
+after the change and the shared values of the other features
+(`MonotonicityViolation`).
+
 The leaf-to-leaf distance matrix (`explainer.leaf_distance_matrix()`), its
 heat map and histograms (`ctreex.plot`) and the *volatility index* of a leaf
 -- i.e., how close it is to leaves of other classes
@@ -180,6 +196,7 @@ the same, e.g., `explainer.volatility_index(leaf, tolerance=50)`.
 |---|---|
 | `TreeCounterfactualExplainer(model, feature_spec, class_names)` | the explainer; `explain_instance(x, instance_values, max_distance, excluded, included, target, rank_by)` returns a `CounterfactualExplanation` |
 | `OtherClass`, `TargetClass`, `SameClass`, `ClassProbability`, `ValueChange`, `ValueAtLeast`, `ValueAtMost`, `ValueWithin`, `MinSamples`, `AllOf`, `AnyOf`, `Not`, `Target` | the leaves the counterfactuals lead to (`ctreex.targets`) |
+| `monotonicity_violations` | pairs of leaves where changing a feature in a direction makes the prediction worse (`MonotonicityViolation`, `ctreex.audit`) |
 | `supportive_explanations`, `invariance_ranges`, `contextualise` | what guarantees a prediction (`SupportiveExplanation`, `ContextualisedCounterfactual`, `ctreex.supportive`) |
 | `CounterfactualExplanation` | `prediction`, `leaf`, `target`, `leaf_distances`, `support` (target and other leaves per distance), `counterfactuals` (one `DistanceCounterfactuals` per distance), `ranked()`, `at_distance(d)` |
 | `FeatureSpec`, `Feature` | maps the columns of a one-hot encoded array to features; display names and category names; `encode`/`decode` |
