@@ -16,13 +16,13 @@ It depends only on `numpy`.
 Python 3.9 or newer is required.
 
 ```sh
-pip install "ctreex @ git+https://github.com/So-Cool/CtreeX.git@v0.1.0"
+pip install "ctreex @ git+https://github.com/So-Cool/CtreeX.git@v0.1.1"
 ```
 
 or with the scikit-learn helpers and the plots
 
 ```sh
-pip install "ctreex[sklearn,plot] @ git+https://github.com/So-Cool/CtreeX.git@v0.1.0"
+pip install "ctreex[sklearn,plot] @ git+https://github.com/So-Cool/CtreeX.git@v0.1.1"
 ```
 
 ## Quick start
@@ -53,11 +53,15 @@ for distance, counterfactual in explanation.ranked():
 # 1 {'housing': {'is': ['renting'], 'wannabe': ['owning a house']}}
 ```
 
-`notebooks/` has three worked examples:
-a quick start, the [UCI German Credit][UCIgc] data and a tour of the rest of
+`notebooks/` has four worked examples:
+a quick start, the [UCI German Credit][UCIgc] data, a tour of the rest of
 the API (feature specifications, explanation details, tree storage,
 leaf-distance plots, scikit-learn helpers, multi-class trees, targets with
-confident leaves and custom specifications, and regression trees).
+confident leaves and custom specifications, and regression trees) and
+what CtreeX explains beyond counterfactuals (training statistics, supportive
+explanations and contexts, directions and monotonicity, feature audits,
+instance-contrastive explanations, data points of counterfactuals and
+plain-text explanations).
 
 [UCIgc]: https://archive.ics.uci.edu/dataset/144/statlog+german+credit+data
 

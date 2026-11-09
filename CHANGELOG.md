@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.1 (unreleased)
+## 0.1.1
 
 * **Training statistics.**
   `TreeStructure` stores the number of training samples
@@ -149,6 +149,14 @@
   counterfactuals;
   `supportive_text(x, target, integer_ranges)` verbalises supportive
   explanations.
+* **Notebooks.**
+  New `04_beyond_counterfactuals.ipynb` demonstrates the additions of this
+  version on the German Credit data:
+  training statistics in targets and rankings, supportive explanations,
+  invariance ranges and contextualised counterfactuals, direction constraints
+  and monotonicity audits, feature audits, instance-contrastive
+  explanations, data points of counterfactuals (nearest, sampled, hidden
+  thresholds, exemplars) and plain-text explanations.
 
 ## 0.1.0
 
