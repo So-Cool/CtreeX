@@ -16,13 +16,13 @@ It depends only on `numpy`.
 Python 3.9 or newer is required.
 
 ```sh
-pip install "ctreex @ git+https://github.com/So-Cool/CtreeX.git@v0.1.1"
+pip install "ctreex @ git+https://github.com/So-Cool/CtreeX.git@v0.1.2"
 ```
 
 or with the scikit-learn helpers and the plots
 
 ```sh
-pip install "ctreex[sklearn,plot] @ git+https://github.com/So-Cool/CtreeX.git@v0.1.1"
+pip install "ctreex[sklearn,plot] @ git+https://github.com/So-Cool/CtreeX.git@v0.1.2"
 ```
 
 ## Quick start
@@ -53,7 +53,7 @@ for distance, counterfactual in explanation.ranked():
 # 1 {'housing': {'is': ['renting'], 'wannabe': ['owning a house']}}
 ```
 
-`notebooks/` has four worked examples:
+`notebooks/` has five worked examples:
 a quick start, the [UCI German Credit][UCIgc] data, a tour of the rest of
 the API (feature specifications, explanation details, tree storage,
 leaf-distance plots, scikit-learn helpers, multi-class trees, targets with
@@ -61,7 +61,7 @@ confident leaves and custom specifications, and regression trees) and
 what CtreeX explains beyond counterfactuals (training statistics, supportive
 explanations and contexts, directions and monotonicity, feature audits,
 instance-contrastive explanations, data points of counterfactuals and
-plain-text explanations).
+plain-text explanations), and global summaries and tree ensembles.
 
 [UCIgc]: https://archive.ics.uci.edu/dataset/144/statlog+german+credit+data
 
@@ -331,7 +331,7 @@ uv sync --group notebooks && uv run jupyter lab notebooks/
 ```
 
 `notebooks/benchmarks.ipynb` times the explainer for trees with 100 to 5,000
-leaves (it is not run by CI);
+leaves and for random forests of 10 to 100 trees (it is not run by CI);
 explaining a data point takes well under a second for a tree with 5,000
 leaves.
 

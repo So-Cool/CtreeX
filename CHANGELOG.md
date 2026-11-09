@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.2 (unreleased)
+## 0.1.2
 
 * **Style checks.**
   The code and tests follow `flake8` (configured in `.flake8`), which is
@@ -63,6 +63,13 @@
 * **Benchmarks.**
   `notebooks/benchmarks.ipynb` times the explainer for trees with 100 to
   5,000 leaves (not run by CI).
+* **Notebooks.**
+  New `05_summaries_and_ensembles.ipynb` demonstrates global summaries (on
+  the German Credit tree and, with bands of predictions, a regression tree)
+  and the experimental explainer of tree ensembles (a random forest of the
+  German Credit data and an extra-trees regressor);
+  `benchmarks.ipynb` also times global summaries and the explainer of
+  random forests.
 
 ## 0.1.1
 
