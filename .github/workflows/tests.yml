@@ -21,6 +21,16 @@ jobs:
       - name: Test
         run: uv run --python ${{ matrix.python-version }} pytest -v
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install
+        run: uv sync --locked
+      - name: Lint
+        run: uv run flake8 src tests
+
   notebooks:
     runs-on: ubuntu-latest
     steps:

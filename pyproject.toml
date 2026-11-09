@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ctreex"
-version = "0.1.1"
+version = "0.1.2"
 description = "CtreeX: Counterfactual explainer of decision trees"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -42,6 +42,7 @@ Homepage = "https://github.com/So-Cool/CtreeX"
 [dependency-groups]
 dev = [
     "pytest>=7",
+    "flake8>=7",
     "scikit-learn>=1.0",
     "joblib>=1.0",
     "matplotlib>=3.5",

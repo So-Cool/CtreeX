@@ -288,6 +288,7 @@ feature specification, the explainer warns.
 ```sh
 uv sync                     # Python 3.12 environment with the test dependencies
 uv run pytest
+uv run flake8 src tests     # style checks (also run by CI)
 uv sync --group notebooks && uv run jupyter lab notebooks/
 ```
 

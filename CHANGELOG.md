@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2 (unreleased)
+
+* **Style checks.**
+  The code and tests follow `flake8` (configured in `.flake8`), which is
+  part of the development dependencies and runs in CI (the `lint` job).
+
 ## 0.1.1
 
 * **Training statistics.**

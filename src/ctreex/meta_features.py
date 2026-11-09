@@ -185,7 +185,8 @@ def tree_paths(tree, spec, class_names=None):
                 continue
             label = tree.leaf_class(node)
             if class_names is not None:
-                label = class_names[label.item() if hasattr(label, 'item') else label]
+                key = label.item() if hasattr(label, 'item') else label
+                label = class_names[key]
             paths.append(Path(conditions, int(node), label))
             continue
         column = int(tree.feature[node])
