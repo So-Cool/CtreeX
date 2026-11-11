@@ -655,13 +655,23 @@ def toy_example(output=RESULTS):
             names[int(leaf)], label, ' & '.join(_cell(v) for v in row), d))
     meta += ['\\midrule', '$x$ & decline & ' + ' & '.join(
         _cell(v) for v in x) + ' & \\\\', '\\bottomrule', '\\end{tabular}']
-    matrix, ids, _ = e.leaf_distance_matrix()
-    table = ['\\begin{tabular}{l' + 'c' * len(ids) + 'c}', '\\toprule',
-             ' & ' + ' & '.join(names[int(i)] for i in ids)
+    # the leaf-to-leaf differences, with the pairs of leaves of different
+    # classes -- those that raise the volatility index -- shaded (requires
+    # the colortbl and xcolor packages)
+    matrix, ids, classes = e.leaf_distance_matrix()
+    # leaves grouped by class, so the shaded cells form blocks
+    order = sorted(range(len(ids)), key=lambda i: (
+        list(dict.fromkeys(classes)).index(classes[i]), i))
+    matrix, ids, classes = matrix[np.ix_(order, order)], ids[order], \
+        classes[order]
+    table = ['\\begin{tabular}{ll' + 'c' * len(ids) + 'c}', '\\toprule',
+             'leaf & class & ' + ' & '.join(names[int(i)] for i in ids)
              + ' & $\\nu$ \\\\', '\\midrule']
-    for leaf, row in zip(ids, matrix):
-        table.append('{} & {} & ${:.2f}$ \\\\'.format(
-            names[int(leaf)], ' & '.join(str(v) for v in row),
+    for leaf, label, row in zip(ids, classes, matrix):
+        cells = [('\\cellcolor{black!15}' if other != label else '') + str(v)
+                 for v, other in zip(row, classes)]
+        table.append('{} & {} & {} & ${:.2f}$ \\\\'.format(
+            names[int(leaf)], label, ' & '.join(cells),
             e.volatility_index(int(leaf))))
     table += ['\\bottomrule', '\\end{tabular}']
     with open(os.path.join(output, 'toy_example_tables.tex'), 'w') as f:
