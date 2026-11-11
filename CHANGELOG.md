@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.3 (unreleased)
+
+* **CtreeX algorithm experiments.**
+  `experiments/experiments.py` and `experiments/experiments.ipynb` contain
+  CtreeX experiments:
+  a toy example demonstrating the CtreeX algorithm as well as
+  CtreeX's counterfactual regions compared to the closest counterfactual point
+  and PyXAI's formal explanations.
+  The experiments are run on the German Credit, Adult, FICO HELOC and
+  California Housing data sets.
+  Their dependencies are installed through the `experiments` group
+  (PyXAI and the fico-challenge package from GitHub, with Python 3.11 or newer).
+
 ## 0.1.2
 
 * **Style checks.**

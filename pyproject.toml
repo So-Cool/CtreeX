@@ -55,9 +55,23 @@ notebooks = [
     "nbconvert>=7",
     "pip>=26.0.1",
 ]
+experiments = [
+    "scikit-learn>=1.4",
+    "pandas>=2.0",
+    "pyxai==2.0.1; python_version >= '3.11'",
+    "fico-xml; python_version >= '3.11'",
+    "ipywidgets>=8.1.9",
+]
 
 [tool.uv]
 default-groups = ["dev"]
+# discard fico-xml's dependency on old CtreeX version since its not needed here
+dependency-metadata = [
+    { name = "fico-xml", version = "0.0.3", requires-dist = ["numpy>=1.24", "pandas>=2.0"] },
+]
+
+[tool.uv.sources]
+fico-xml = { git = "https://github.com/So-Cool/fico-challenge", tag = "v0.0.3" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ctreex"]

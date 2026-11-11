@@ -15,3 +15,8 @@ htmlcov/
 
 # Downloaded example data
 *.data
+
+# Experiments (downloaded data, results and PyXAI's temp files)
+experiments/data/
+experiments/results/
+tmp/
