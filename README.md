@@ -357,6 +357,7 @@ The experiments require Python 3.11 or newer:
 uv sync --group experiments --group notebooks
 uv run python experiments/experiments.py          # everything (a few minutes)
 uv run python experiments/experiments.py --quick  # a smoke test
+uv run python experiments.py --diagnose           # PyXAI diagnosis
 uv run jupyter lab experiments/                   # the notebook
 ```
 

@@ -27,6 +27,7 @@ Usage (Python 3.11 or newer)::
     uv sync --group experiments --group notebooks
     uv run python experiments.py                   # everything
     uv run python experiments.py --quick           # a smoke test
+    uv run python experiments.py --diagnose        # PyXAI diagnosis
     uv run jupyter lab ./                          # the notebook
 
 The XGBoost package -- which is a dependency of PyXAI -- requires OpenMP
@@ -321,14 +322,42 @@ def point_vs_ctreex(dataset, depth, tree, X_train, points):
 
 
 def _import_pyxai():
-    """PyXAI parses the command line when imported so hide it."""
+    """
+    Imports PyXAI, hiding the command line (PyXAI parses it when imported),
+    and makes it use the RC2 MaxSAT solver of PySAT.
+
+    PyXAI computes minimal sufficient reasons (abductive explanations) of
+    decision trees with an OpenWBO executable that it bundles;
+    its MacOS build targets x86-64 and returns no reason for some data points
+    on Apple Silicon.
+    RC2 is compiled for every platform and gives the same reasons as OpenWBO
+    on Linux (when all the minimal reasons are enumerated).
+    """
     arguments, sys.argv = sys.argv, sys.argv[:1]
     try:
         with contextlib.redirect_stdout(io.StringIO()):
             from pyxai import Explaining, Learning
+            import pyxai.sources.explainers.explainerDT as explainer_dt
     finally:
         sys.argv = arguments
+    explainer_dt.OPENWBOSolver = _rc2_solver()
     return Explaining, Learning
+
+
+def _rc2_solver():
+    """A PyXAI MaxSAT solver backed by PySAT's RC2."""
+    from pysat.examples.rc2 import RC2
+    from pyxai.sources.solvers.MAXSAT.MAXSATSolver import MAXSATSolver
+
+    class RC2Solver(MAXSATSolver):
+        def solve(self, *, time_limit=0):
+            start = time.time()
+            with RC2(self.WCNF) as rc2:
+                model = rc2.compute()
+            status = None if model is None else 'OPTIMUM FOUND'
+            return status, model, time.time() - start
+
+    return RC2Solver
 
 
 def _pyxai(tree, dataset, X_train, y_train):
@@ -367,9 +396,9 @@ def pyxai_vs_ctreex(dataset, depth, tree, X_train, y_train, points):
             start = time.perf_counter()
             pyxai.set_instance(x)
             reasons = pyxai.contrastive_reason(n=Explaining.ALL)
-            sufficient = pyxai.minimal_sufficient_reason(
-                n=1, time_limit=PYXAI_TIME_LIMIT)
-            pyxai_time = time.perf_counter() - start
+            cxp_time = time.perf_counter() - start
+        sufficients, axp_time, status, message = _minimal_sufficient(pyxai)
+        pyxai_time = cxp_time + axp_time
         reasons = [r for r in reasons if r]
         sets = [_features(dataset.spec, pyxai.to_features(
             r, details=True, contrastive=True)) for r in reasons]
@@ -378,18 +407,59 @@ def pyxai_vs_ctreex(dataset, depth, tree, X_train, y_train, points):
         fewest = min(len(r) for r in reasons)
         by_conditions = min(len(s) for s, r in zip(sets, reasons)
                             if len(r) == fewest)
-        timeout = sufficient is None or len(sufficient) == 0
-        axp = None if timeout else len(_features(
-            dataset.spec, pyxai.to_features(sufficient, details=True)))
+        # the smallest number of features among PyXAI's smallest (in
+        # literals) abductive explanations, which may differ in features
+        axp = None if status != 'ok' else min(
+            len(_features(dataset.spec, pyxai.to_features(r, details=True)))
+            for r in sufficients)
         rows.append({
             'dataset': dataset.name, 'depth': depth, 'point': i,
             'cxp_agree': ctreex_sets == pyxai_sets,
             'conditions_miss': by_conditions > smallest,
             'pyxai_axp': axp,
             'ctreex_supportive': len(supportive[0].conditions),
-            'pyxai_timeout': timeout,
+            'pyxai_axp_status': status, 'pyxai_axp_ms': 1000 * axp_time,
+            'pyxai_axp_message': message,
             'pyxai_ms': 1000 * pyxai_time, 'ctreex_ms': 1000 * ctreex_time})
     return rows
+
+
+def _minimal_sufficient(pyxai, time_limit=PYXAI_TIME_LIMIT):
+    """
+    PyXAI's smallest abductive explanations of its current instance:
+    all the sufficient reasons with the fewest literals (enumerating all of
+    them makes the result independent of the solver, which breaks ties between
+    them arbitrarily).
+
+    Returns
+    -------
+    tuple
+        The reasons (or ``None``), the time it took (seconds), its status --
+        ``'ok'``, ``'timeout'`` (the time limit was reached) or
+        ``'no_result'`` (PyXAI returned nothing before the time limit) --
+        and, unless ``'ok'``, what PyXAI returned and printed.
+    """
+    Explaining, _ = _import_pyxai()
+    printed = io.StringIO()
+    start = time.perf_counter()
+    try:
+        with contextlib.redirect_stdout(printed):
+            sufficient = pyxai.minimal_sufficient_reason(
+                n=Explaining.ALL, time_limit=time_limit)
+    except Exception as error:  # reported, not raised
+        sufficient = None
+        printed.write('{}: {}'.format(type(error).__name__, error))
+    elapsed = time.perf_counter() - start
+    if sufficient is not None and len(sufficient) > 0:
+        # a single reason is returned as a tuple of literals
+        if not isinstance(sufficient[0], tuple):
+            sufficient = (sufficient,)
+        return sufficient, elapsed, 'ok', ''
+    status = 'timeout' if time_limit is not None and \
+        elapsed >= 0.95 * time_limit else 'no_result'
+    message = 'returned {!r}; printed: {}'.format(
+        sufficient, ' '.join(printed.getvalue().split()))[:500]
+    return sufficient, elapsed, status, message
 
 
 def run(datasets=tuple(DATASETS), depths=DEPTHS, output=RESULTS,
@@ -475,7 +545,10 @@ def summarise_pyxai_vs_ctreex(pyxai_vs_ctreex_frame):
         **_spread(grouped, 'ctreex_supportive'),
         **_quartiles(grouped, 'pyxai_ms'),
         **_quartiles(grouped, 'ctreex_ms'),
-        'timeouts': grouped['pyxai_timeout'].sum(),
+        'axp_timeouts': grouped['pyxai_axp_status'].apply(
+            lambda s: int((s == 'timeout').sum())),
+        'axp_no_result': grouped['pyxai_axp_status'].apply(
+            lambda s: int((s == 'no_result').sum())),
         'points': grouped.size()}).reset_index()
 
 
@@ -702,6 +775,68 @@ def toy_example(output=RESULTS):
     return '\n'.join(lines)
 
 
+def diagnose_pyxai(dataset_key='german', depth=4, limit=10, output=RESULTS):
+    """
+    Reports the software versions and explains why PyXAI returns no abductive
+    explanation for some points:
+    what PyXAI returned and printed, whether it succeeds without a time limit
+    and whether a (not necessarily minimal) sufficient reason exists, all for
+    (up to ``limit``) affected points of one tree.
+    The report goes to ``pyxai_log.txt``.
+    """
+    import importlib.metadata
+    import platform
+    lines = ['platform: {} ({})'.format(platform.platform(),
+                                        platform.machine()),
+             'python: {}'.format(sys.version.split()[0])]
+    for package in ('pyxai', 'python-sat', 'ortools', 'numpy',
+                    'scikit-learn', 'docplex', 'pycsp3'):
+        try:
+            version = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            version = 'not installed'
+        lines.append('{}: {}'.format(package, version))
+    dataset = DATASETS[dataset_key]()
+    X_train, X_test, y_train, _ = train_test_split(
+        dataset.X, dataset.y, test_size=0.2, random_state=SEED,
+        stratify=dataset.y)
+    points = X_test[_sample(len(X_test), np.random.default_rng(SEED))]
+    tree = train(dataset, depth, X_train, y_train)
+    pyxai = _pyxai(tree, dataset, X_train, y_train)
+    lines.append('{} depth {}: {} leaves, {} points'.format(
+        dataset.name, depth, tree.get_n_leaves(), len(points)))
+    statuses, shown = {}, 0
+    for i, x in enumerate(points):
+        with contextlib.redirect_stdout(io.StringIO()):
+            pyxai.set_instance(x)
+        _, elapsed, status, message = _minimal_sufficient(pyxai)
+        statuses[status] = statuses.get(status, 0) + 1
+        if status == 'ok' or shown >= limit:
+            continue
+        shown += 1
+        lines.append('\n-- point {} ({:.1f} ms): {}'.format(
+            i, 1000 * elapsed, status))
+        lines.append('   minimal_sufficient_reason: ' + message)
+        retry, elapsed, status, message = _minimal_sufficient(pyxai, None)
+        lines.append('   without a time limit ({:.1f} ms): {} {}'.format(
+            1000 * elapsed, status,
+            [len(r) for r in retry] if status == 'ok' else message))
+        printed = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(printed):
+                reason = pyxai.sufficient_reason(n=1)
+            lines.append('   sufficient_reason: {} literals'.format(
+                len(reason) if reason else reason))
+        except Exception as error:
+            lines.append('   sufficient_reason raised {}: {}'.format(
+                type(error).__name__, error))
+    lines.insert(len(lines) - shown * 4, 'statuses: {}'.format(statuses))
+    os.makedirs(output, exist_ok=True)
+    with open(os.path.join(output, 'pyxai_log.txt'), 'w') as f:
+        f.write('\n'.join(lines) + '\n')
+    return '\n'.join(lines)
+
+
 def main():
     global POINTS
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
@@ -713,7 +848,13 @@ def main():
     parser.add_argument('--output', default=RESULTS)
     parser.add_argument('--quick', action='store_true',
                         help='depth 4 and 20 points (a smoke test)')
+    parser.add_argument('--diagnose', action='store_true',
+                        help='only diagnose missing PyXAI abductive '
+                        'explanations (German Credit, depth 4)')
     arguments = parser.parse_args()
+    if arguments.diagnose:
+        print(diagnose_pyxai(output=arguments.output))
+        return
     POINTS = 20 if arguments.quick else arguments.points
     depths = [4] if arguments.quick else arguments.depths
     print(toy_example(arguments.output))
